@@ -1,8 +1,56 @@
-*~
-*.dll
-*.o
-*.so
+# Build directories
+build_wine11/
 build32/
 build64/
-debian/
+dist/
+
+# Object files
+*.o
+*.a
+*.obj
+
+# Libraries and executables
+*.dll
+*.so
+*.exe
+*.dll.so
+
+# Editor and IDE files
+*.swp
+*.swo
+*~
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Python
 __pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+.eggs/
+
+# Wine/Windows temp files
+*.log
+
+# Temporary files
+*.tmp
+*.temp
+*.bak
+*.backup
+
+# Archives (don't commit release tarballs)
+*.tar.gz
+*.zip
+*.7z
+
+# Keep these specific files even if they match patterns above
+!wineasio-register
+!gui/wineasio-settings

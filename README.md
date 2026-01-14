@@ -3,204 +3,406 @@
 WineASIO provides an ASIO to JACK driver for WINE.  
 ASIO is the most common Windows low-latency driver, so is commonly used in audio workstation programs.
 
-You can, for example, use with FLStudio under GNU/Linux systems (together with JACK).
+You can, for example, use with FL Studio, Ableton Live, Reaper, and other DAWs under GNU/Linux systems (together with JACK).
 
 ![Screenshot](screenshot.png)
 
-For best results with Debian-based distributions,
-enable the [KXStudio repositories](https://kx.studio/Repositories) and install WineASIO from there.
+---
 
-### BUILDING
+## 🎉 Wine 11 Support (NEW!)
 
-Do the following to build for 32-bit Wine.
+**WineASIO now supports Wine 11!**
+
+Wine 11 (released January 13, 2025) introduced a new DLL architecture that separates PE (Windows) code from Unix code. This required a complete rewrite of WineASIO's build system and internal architecture.
+
+### Wine Version Compatibility
+
+| Wine Version | Build Method | Status |
+|--------------|--------------|--------|
+| Wine 11.x | `make -f Makefile.wine11` | ✅ Fully Supported |
+| Wine 10.2+ | `make -f Makefile.wine11` | ✅ Fully Supported |
+| Wine 10.0-10.1 | `make` (legacy) | ✅ Supported |
+| Wine 6.x-9.x | `make` (legacy) | ✅ Supported |
+
+---
+
+## Building for Wine 11+
+
+### Prerequisites
 
 ```sh
-make 32
+# Ubuntu/Debian
+sudo apt install gcc-mingw-w64 wine-stable wine-stable-dev libjack-jackd2-dev
+
+# Fedora
+sudo dnf install mingw64-gcc mingw32-gcc wine-devel jack-audio-connection-kit-devel
+
+# Arch Linux
+sudo pacman -S mingw-w64-gcc wine wine-staging jack2
 ```
 
-Do the following to build for 64-bit Wine.
+### Build Commands (Wine 11+)
+
+Build both 32-bit and 64-bit versions:
 
 ```sh
+make -f Makefile.wine11 all
+```
+
+Build only 64-bit:
+
+```sh
+make -f Makefile.wine11 64
+```
+
+Build only 32-bit:
+
+```sh
+make -f Makefile.wine11 32
+```
+
+### Installation (Wine 11+)
+
+```sh
+sudo make -f Makefile.wine11 install
+```
+
+This will:
+- Copy `wineasio64.dll` to Wine's 64-bit PE directory
+- Copy `wineasio64.so` to Wine's 64-bit Unix directory  
+- Copy `wineasio.dll` to Wine's 32-bit PE directory
+- Copy `wineasio.so` to Wine's 32-bit Unix directory
+- Register the driver with Wine
+
+### Manual Installation (Wine 11+)
+
+For custom Wine installations, specify the Wine prefix:
+
+```sh
+sudo make -f Makefile.wine11 install WINE_PREFIX=/path/to/wine
+```
+
+Default paths for Wine 11:
+
+```sh
+# 64-bit
+sudo cp build_wine11/wineasio64.dll /opt/wine-stable/lib/wine/x86_64-windows/
+sudo cp build_wine11/wineasio64.so /opt/wine-stable/lib/wine/x86_64-unix/
+
+# 32-bit
+sudo cp build_wine11/wineasio.dll /opt/wine-stable/lib/wine/i386-windows/
+sudo cp build_wine11/wineasio.so /opt/wine-stable/lib/wine/i386-unix/
+```
+
+### Registration (Wine 11+)
+
+After installation, register the driver:
+
+```sh
+# 64-bit
+wine regsvr32 wineasio64.dll
+
+# 32-bit (use syswow64 regsvr32 for WoW64)
+wine ~/.wine/drive_c/windows/syswow64/regsvr32.exe wineasio.dll
+```
+
+Or use the Makefile:
+
+```sh
+make -f Makefile.wine11 register
+```
+
+### Verify Installation
+
+```sh
+make -f Makefile.wine11 verify
+```
+
+This checks:
+- All DLL and SO files are in place
+- Registry entries are correct
+
+---
+
+## Building for Wine 10.1 and Earlier (Legacy)
+
+### Build Commands
+
+```sh
+# 32-bit
+make 32
+
+# 64-bit
 make 64
 ```
 
-### INSTALLING
-
-To install 32-bit WineASIO (substitute with the path to the 32-bit wine libs for your distro).
+### Installation (Legacy)
 
 ```sh
+# 32-bit
 sudo cp build32/wineasio32.dll /usr/lib/i386-linux-gnu/wine/i386-windows/
 sudo cp build32/wineasio32.dll.so /usr/lib/i386-linux-gnu/wine/i386-unix/
-```
 
-To install 64bit WineASIO (substitute with the path to the 64-bit wine libs for your distro).
-
-```sh
+# 64-bit
 sudo cp build64/wineasio64.dll /usr/lib/x86_64-linux-gnu/wine/x86_64-windows/
 sudo cp build64/wineasio64.dll.so /usr/lib/x86_64-linux-gnu/wine/x86_64-unix/
 ```
 
-**NOTE:**  
-**Wine does not have consistent paths between different Linux distributions, these paths are only a hint and likely not what will work for you.**  
-**New versions of wine might also need to use `wineasio64.so` as name instead of `wineasio64.dll.so`.**  
-**It is up to the packager to figure out what works for the Wine version used on their specific distro.**
+**Note:** Wine paths vary between distributions. Adjust paths accordingly.
 
-#### EXTRAS
+---
 
-For user convenience a `wineasio-register` script is included in this repo, if you are packaging WineASIO consider installing it as part of WineASIO.
+## Registering WineASIO
 
-Additionally a control panel GUI is provided in this repository's `gui` subdir, which requires PyQt6 or PyQt5 to build and run.  
-The WineASIO driver will use this GUI as the ASIO control panel.
-
-### REGISTERING
-
-After building and installing WineASIO, we still need to register it on each Wine prefix.  
-For your convenience a script is provided on this repository, so you can simply run:
+After installing, register WineASIO in your Wine prefix:
 
 ```sh
 wineasio-register
 ```
 
-to activate WineASIO for the current Wine prefix.
-
-#### CUSTOM WINEPREFIX
-
-The `wineasio-register` script will register the WineASIO driver in the default Wine prefix `~/.wine`.  
-You can specify another prefix like so:
+### Custom Wine Prefix
 
 ```sh
-env WINEPREFIX=~/asioapp wineasio-register
+env WINEPREFIX=~/my-daw-prefix wineasio-register
 ```
 
-### GENERAL INFORMATION
+---
 
-ASIO apps get notified if the jack buffersize changes.
+## Configuration
 
-WineASIO can slave to the jack transport.
+WineASIO is configured via the Windows registry (`HKEY_CURRENT_USER\Software\Wine\WineASIO`).  
+All options can be overridden by environment variables.
 
-WineASIO can change jack's buffersize if so desired. Must be enabled in the registry, see below.
+### Available Options
 
-The configuration of WineASIO is done with Windows registry (`HKEY_CURRENT_USER\Software\Wine\WineASIO`).  
-All these options can be overridden by environment variables.  
-There is also a GUI for changing these settings, which WineASIO will try to launch when the ASIO "panel" is clicked.
+| Registry Key | Default | Environment Variable | Description |
+|--------------|---------|---------------------|-------------|
+| Number of inputs | 16 | `WINEASIO_NUMBER_INPUTS` | Number of JACK input ports |
+| Number of outputs | 16 | `WINEASIO_NUMBER_OUTPUTS` | Number of JACK output ports |
+| Autostart server | 0 (off) | `WINEASIO_AUTOSTART_SERVER` | Start JACK automatically |
+| Connect to hardware | 1 (on) | `WINEASIO_CONNECT_TO_HARDWARE` | Auto-connect to physical ports |
+| Fixed buffersize | 1 (on) | `WINEASIO_FIXED_BUFFERSIZE` | Buffer size controlled by JACK |
+| Preferred buffersize | 1024 | `WINEASIO_PREFERRED_BUFFERSIZE` | Preferred buffer size (power of 2) |
+| Client name | (auto) | `WINEASIO_CLIENT_NAME` | JACK client name |
 
-The registry keys are automatically created with default values if they doesn't exist when the driver initializes.
-The available options are:
+### GUI Control Panel (Wine 11)
 
-#### [Number of inputs] & [Number of outputs]
-These two settings control the number of jack ports that WineASIO will try to open.  
-Defaults are 16 in and 16 out.  Environment variables are `WINEASIO_NUMBER_INPUTS` and `WINEASIO_NUMBER_OUTPUTS`.
+A PyQt5/PyQt6 control panel is included for configuring WineASIO settings. When you click "Show ASIO Panel" in your DAW (e.g., FL Studio, Reaper), WineASIO launches the native Linux settings GUI.
 
-#### [Autostart server]
+**How it works:**
+1. Your DAW calls the ASIO `ControlPanel()` function
+2. WineASIO's Unix-side code uses `fork()/exec()` to launch `wineasio-settings`
+3. The Python/PyQt GUI reads and writes settings to the Wine registry
 
-Defaults to off (0), setting it to 1 enables WineASIO to launch the jack server.  
-See the jack documentation for further details.  
-The environment variable is `WINEASIO_AUTOSTART_SERVER`, and it can be set to on or off.
+**Launch manually:**
 
-#### [Connect to hardware]
-Defaults to on (1), makes WineASIO try to connect the ASIO channels to the physical I/O ports on your hardware.  
-Setting it to 0 disables it.  
-The environment variable is `WINEASIO_CONNECT_TO_HARDWARE`, and it can be set to on or off.
+```sh
+# From Linux terminal
+wineasio-settings
 
-#### [Fixed buffersize]
-Defaults to on (1) which means the buffer size is controlled by jack and WineASIO has no say in the matter.  
-When set to 0, an ASIO app will be able to change the jack buffer size when calling CreateBuffers().  
-The environment variable is `WINEASIO_FIXED_BUFFERSIZE` and it can be set to on or off.
+# From Wine (using Windows launcher)
+wine /usr/share/wineasio/wineasio-settings64.exe
+```
 
-#### [Preferred buffersize]
-Defaults to 1024, and is one of the sizes returned by `GetBufferSize()`, see the ASIO documentation for details.  
-Must be a power of 2.
+**Requirements:**
+- PyQt5 or PyQt6: `pip install PyQt5` or `pip install PyQt6`
 
-The other values returned by the driver are hardcoded in the source,  
-see `ASIO_MINIMUM_BUFFERSIZE` which is set at 16, and `ASIO_MAXIMUM_BUFFERSIZE` which is set to 8192.  
-The environment variable is `WINEASIO_PREFERRED_BUFFERSIZE`.
+---
 
-Be careful, if you set a size that isn't supported by the backend, the jack server will most likely shut down,
-might be a good idea to change `ASIO_MINIMUM_BUFFERSIZE` and `ASIO_MAXIMUM_BUFFERSIZE` to values you know work on your system before building.
+## JACK MIDI Support (Wine 11)
 
-In addition there is a `WINEASIO_CLIENT_NAME` environment variable,
-that overrides the JACK client name derived from the program name.
+WineASIO 1.4.0+ creates JACK MIDI ports for routing MIDI between your DAW and other JACK applications.
 
-### CHANGE LOG
+### MIDI Ports
 
-#### 1.3.0
+When WineASIO connects to JACK, it registers:
+- `WineASIO:midi_in` - MIDI input (receives MIDI from other JACK clients)
+- `WineASIO:midi_out` - MIDI output (sends MIDI to other JACK clients)
+
+### Verify MIDI Ports
+
+```sh
+jack_lsp | grep -i midi
+```
+
+You should see:
+```
+WineASIO:midi_in
+WineASIO:midi_out
+```
+
+### Connecting MIDI Devices
+
+Use `jack_connect`, QjackCtl, or Carla to route MIDI:
+
+```sh
+# Connect a hardware MIDI input to WineASIO
+jack_connect "system:midi_capture_1" "WineASIO:midi_in"
+
+# Connect WineASIO MIDI output to a synth
+jack_connect "WineASIO:midi_out" "Yoshimi:midi_in"
+```
+
+### Using with a2jmidid
+
+If your MIDI devices appear as ALSA MIDI (not JACK), use `a2jmidid` to bridge them:
+
+```sh
+# Start the ALSA-to-JACK MIDI bridge
+a2jmidid -e &
+
+# Now ALSA MIDI devices appear as JACK MIDI ports
+jack_lsp | grep a2j
+```
+
+### Relationship with Wine ALSA MIDI
+
+Wine uses `winealsa.drv` for Windows MIDI API support (separate from WineASIO). The WineASIO JACK MIDI ports provide an additional routing option specifically for JACK-based workflows.
+
+---
+
+## Troubleshooting
+
+### Settings GUI doesn't open
+
+1. Ensure `wineasio-settings` is in PATH: `which wineasio-settings`
+2. Check PyQt is installed: `python3 -c "from PyQt5.QtWidgets import QApplication"`
+3. Try launching manually: `wineasio-settings`
+
+### JACK MIDI ports not visible
+
+1. Ensure JACK is running: `jack_lsp`
+2. Verify WineASIO is connected: `jack_lsp | grep WineASIO`
+3. For ALSA MIDI devices, use `a2jmidid -e` to bridge to JACK
+
+### Wine 11: "Unix library not found"
+
+Ensure both PE and Unix libraries are installed:
+
+```sh
+# Check files exist
+ls -la /opt/wine-stable/lib/wine/x86_64-windows/wineasio64.dll
+ls -la /opt/wine-stable/lib/wine/x86_64-unix/wineasio64.so
+```
+
+### Wine 11: DLL not loading
+
+Make sure the DLL is marked as a Wine builtin:
+
+```sh
+sudo winebuild --builtin /opt/wine-stable/lib/wine/x86_64-windows/wineasio64.dll
+```
+
+### JACK not connecting
+
+1. Ensure JACK is running: `jack_lsp`
+2. Check WineASIO JACK client: `jack_lsp | grep -i wine`
+3. Use QjackCtl or Carla to manage connections
+
+### 32-bit apps not finding WineASIO
+
+32-bit Windows apps use WoW64. Ensure:
+- `wineasio.dll` is in `i386-windows/`
+- `wineasio.so` is in `i386-unix/`
+- Register with 32-bit regsvr32: `wine ~/.wine/drive_c/windows/syswow64/regsvr32.exe wineasio.dll`
+
+---
+
+## Technical Details (Wine 11 Architecture)
+
+Wine 11 requires a split architecture:
+
+| Component | Description | Built With |
+|-----------|-------------|------------|
+| `wineasio64.dll` | 64-bit PE DLL (Windows code) | mingw-w64 |
+| `wineasio64.so` | 64-bit Unix library (JACK interface) | gcc |
+| `wineasio.dll` | 32-bit PE DLL (Windows code) | mingw-w64 |
+| `wineasio.so` | 32-bit Unix library (JACK interface) | gcc |
+
+The PE DLL handles:
+- COM/ASIO interface
+- Registry configuration
+- Host application callbacks
+
+The Unix SO handles:
+- JACK connection and audio processing
+- Real-time audio callbacks
+- Buffer management
+
+Communication between PE and Unix uses Wine's `__wine_unix_call` interface.
+
+---
+
+## File Structure
+
+```
+wineasio-1.3.0/
+├── asio_pe.c           # PE-side code (Wine 11)
+├── asio_unix.c         # Unix-side code (Wine 11)
+├── unixlib.h           # Shared interface definitions
+├── Makefile.wine11     # Wine 11+ build system
+├── Makefile            # Legacy build system
+├── asio.c              # Legacy combined code
+├── wineasio.def        # Export definitions
+├── ntdll_wine.def      # 64-bit ntdll imports
+├── ntdll_wine32.def    # 32-bit ntdll imports
+├── gui/                # PyQt control panel
+│   ├── settings.py     # Main settings GUI
+│   ├── ui_settings.py  # UI definitions
+│   └── launcher/       # Windows launcher sources
+└── docker/             # Docker build environment
+```
+
+---
+
+## Change Log
+
+### 1.4.0 (Wine 11 Port) - January 2025
+* **NEW:** Full Wine 11 support with new PE/Unix split architecture
+* **NEW:** `Makefile.wine11` for building with Wine 10.2+/11
+* **NEW:** Separate PE DLL and Unix SO builds
+* **NEW:** Support for `__wine_unix_call` interface
+* **NEW:** 32-bit and 64-bit builds with proper WoW64 support
+* **NEW:** Settings GUI integration - launch from DAW's ASIO control panel
+* **NEW:** JACK MIDI ports (`WineASIO:midi_in`, `WineASIO:midi_out`)
+* **NEW:** Windows launcher executables for GUI (`wineasio-settings*.exe`)
+* Added `asio_pe.c` - Windows-side ASIO implementation
+* Added `asio_unix.c` - Unix-side JACK implementation (with MIDI support)
+* Added `unixlib.h` - Shared interface definitions
+* Added export definition files for Wine compatibility
+
+### 1.3.0
 * 24-JUL-2025: Make GUI settings panel compatible with PyQt6 or PyQt5
-* 17-JUL-2025: Load libjack.so.0 dynamically at runtime, removing build dep
+* 17-JUL-2025: Load libjack.so.0 dynamically at runtime
 * 17-JUL-2025: Remove useless -mnocygwin flag
 * 28-JUN-2025: Remove dependency on asio headers
 
-#### 1.2.0
+### 1.2.0
 * 29-SEP-2023: Fix compatibility with Wine > 8
-* 29-SEP-2023: Add wineasio-register script for simplifying driver registration
+* 29-SEP-2023: Add wineasio-register script
 
-#### 1.1.0
-* 18-FEB-2022: Various bug fixes (falkTX)
+### 1.1.0
+* 18-FEB-2022: Various bug fixes
 * 24-NOV-2021: Fix compatibility with Wine > 6.5
 
-#### 1.0.0
+### 1.0.0
 * 14-JUL-2020: Add packaging script
 * 12-MAR-2020: Fix control panel startup
 * 08-FEB-2020: Fix code to work with latest Wine
-* 08-FEB-2020: Add custom GUI for WineASIO settings, made in PyQt5 (taken from Cadence project code)
+* 08-FEB-2020: Add custom GUI for WineASIO settings
 
-#### 0.9.2
-* 28-OCT-2013: Add 64-bit support and some small fixes
+---
 
-#### 0.9.1
-* 15-OCT-2013: Various bug fixes (JH)
+## Contributing
 
-#### 0.9.0
-* 19-FEB-2011: Nearly complete refactoring of the WineASIO codebase (asio.c) (JH)
+Contributions are welcome! Please test with:
+- Wine 11.x (new architecture)
+- Various DAWs (FL Studio, Reaper, Ableton, Bitwig, etc.)
+- Both 32-bit and 64-bit applications
 
-#### 0.8.1
-* 05-OCT-2010: Code from Win32 callback thread moved to JACK process callback, except for bufferSwitch() call.
-* 05-OCT-2010: Switch from int to float for samples.
+---
 
-#### 0.8.0
-* 08-AUG-2010: Forward port JackWASIO changes... needs testing hard. (PLJ)
-
-#### 0.7.6
-* 27-DEC-2009: Fixes for compilation on 64-bit platform. (PLJ)
-
-#### 0.7.5
-* 29-Oct-2009: Added fork with call to qjackctl from ASIOControlPanel(). (JH)
-* 29-Oct-2009: Changed the SCHED_FIFO priority of the win32 callback thread. (JH)
-* 28-Oct-2009: Fixed wrongly reported output latency. (JH)
-
-#### 0.7.4
-* 08-APR-2008: Updates to the README.TXT (PLJ)
-* 02-APR-2008: Move update to "toggle" to hopefully better place (PLJ)
-* 24-MCH-2008: Don't trace in win32_callback.  Set patch-level to 4. (PLJ)
-* 09-JAN-2008: Nedko Arnaudov supplied a fix for Nuendo under WINE.
-
-#### 0.7.3
-* 27-DEC-2007: Make slaving to jack transport work, correct port allocation bug. (RB)
-
-#### 0.7
-* 01-DEC-2007: In a fit of insanity, I merged JackLab and Robert Reif code bases. (PLJ)
-
-#### 0.6
-* 21-NOV-2007: add dynamic client naming (PLJ)
-
-#### 0.0.3
-* 17-NOV-2007: Unique port name code (RR)
-
-#### 0.5
-* 03-SEP-2007: port mapping and config file (PLJ)
-
-#### 0.3
-* 30-APR-2007: corrected connection of in/outputs (RB)
-
-#### 0.1
-* ???????????: Initial RB release (RB)
-
-#### 0.0.2
-* 12-SEP-2006: Fix thread bug, tidy up code (RR)
-
-#### 0.0.1
-* 31-AUG-2006: Initial version (RR)
-
-### LEGAL STUFF
+## Legal
 
 Copyright (C) 2006 Robert Reif  
 Portions copyright (C) 2007 Ralf Beck  
@@ -213,6 +415,7 @@ Portions copyright (C) 2010 Nedko Arnaudov
 Portions copyright (C) 2011 Christian Schoenebeck  
 Portions copyright (C) 2013 Joakim Hernberg  
 Portions copyright (C) 2020-2023 Filipe Coelho  
+Portions copyright (C) 2025 Wine 11 Port Contributors
 
 The WineASIO library code is licensed under LGPL v2.1, see COPYING.LIB for more details.  
-The WineASIO settings UI code is licensed under GPL v2+, see COPYING.GUI for more details.  
+The WineASIO settings UI code is licensed under GPL v2+, see COPYING.GUI for more details.
