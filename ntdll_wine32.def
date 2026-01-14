@@ -1,0 +1,7 @@
+; Wine-specific symbols from ntdll.dll for WineASIO (32-bit)
+; NtQueryVirtualMemory is loaded dynamically via GetProcAddress to avoid
+; stdcall decoration mismatch between mingw (@24) and Wine (undecorated)
+LIBRARY ntdll.dll
+EXPORTS
+    __wine_unix_call_dispatcher DATA
+    __wine_unixlib_handle DATA
