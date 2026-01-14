@@ -1,0 +1,280 @@
+#!/usr/bin/make -f
+# Makefile for WineASIO - Wine 11+ Architecture
+# ---------------------------------------------
+# This builds WineASIO with the new PE/Unix split architecture
+# required for Wine 10.2+ and Wine 11
+#
+# Usage:
+#   make -f Makefile.wine11 64        # Build 64-bit only
+#   make -f Makefile.wine11 32        # Build 32-bit only
+#   make -f Makefile.wine11 all       # Build both
+#   make -f Makefile.wine11 install   # Install to Wine directories
+#   make -f Makefile.wine11 clean     # Clean build files
+#
+
+# Wine installation prefix
+WINE_PREFIX ?= /opt/wine-stable
+# Alternative: /usr
+
+# Build directory
+BUILD_DIR = build_wine11
+
+# Compilers
+MINGW32 = i686-w64-mingw32-gcc
+MINGW64 = x86_64-w64-mingw32-gcc
+DLLTOOL32 = i686-w64-mingw32-dlltool
+DLLTOOL64 = x86_64-w64-mingw32-dlltool
+GCC = gcc
+
+# Wine tools
+WINEBUILD = winebuild
+
+# Flags for PE DLL (Windows side - mingw)
+PE_CFLAGS = -Wall -O2 -fvisibility=hidden
+PE_CFLAGS += -DWIN32 -D_WIN32
+
+PE_LDFLAGS = -shared
+PE_LIBS = -lole32 -loleaut32 -luuid -ladvapi32 -lkernel32
+
+# Flags for Unix .so (Linux side - gcc)
+UNIX_CFLAGS = -Wall -O2 -fPIC -fvisibility=hidden
+UNIX_CFLAGS += -DWINE_UNIX_LIB -D__WINESRC__
+UNIX_CFLAGS += -I$(WINE_PREFIX)/include
+UNIX_CFLAGS += -I$(WINE_PREFIX)/include/wine
+UNIX_CFLAGS += -I$(WINE_PREFIX)/include/wine/windows
+
+UNIX_LDFLAGS = -shared -fPIC
+UNIX_LIBS = -ldl -lpthread
+
+# Source files
+PE_SOURCES = asio_pe.c
+UNIX_SOURCES = asio_unix.c
+
+# Output files
+# Note: 32-bit uses "wineasio.dll" (not wineasio32) to match Wine's expected naming
+DLL32 = wineasio.dll
+DLL64 = wineasio64.dll
+SO32 = wineasio.so
+SO64 = wineasio64.so
+
+# Import library for ntdll Wine-specific symbols
+NTDLL_DEF64 = ntdll_wine.def
+NTDLL_DEF32 = ntdll_wine32.def
+NTDLL_LIB32 = $(BUILD_DIR)/libntdll_wine32.a
+NTDLL_LIB64 = $(BUILD_DIR)/libntdll_wine64.a
+
+# Installation directories
+INSTALL_DIR32 = $(WINE_PREFIX)/lib/wine/i386-windows
+INSTALL_DIR64 = $(WINE_PREFIX)/lib/wine/x86_64-windows
+INSTALL_UNIX32 = $(WINE_PREFIX)/lib/wine/i386-unix
+INSTALL_UNIX64 = $(WINE_PREFIX)/lib/wine/x86_64-unix
+
+# GUI installation
+PREFIX ?= /usr
+GUI_BIN_DIR = $(PREFIX)/bin
+GUI_SHARE_DIR = $(PREFIX)/share/wineasio
+
+.PHONY: all 32 64 clean install install32 install64 install-gui help ntdll-libs
+
+help:
+	@echo "WineASIO Wine 11+ Build System"
+	@echo ""
+	@echo "Usage:"
+	@echo "  make -f Makefile.wine11 64        Build 64-bit"
+	@echo "  make -f Makefile.wine11 32        Build 32-bit"
+	@echo "  make -f Makefile.wine11 all       Build both"
+	@echo "  make -f Makefile.wine11 install   Install to Wine"
+	@echo "  make -f Makefile.wine11 clean     Clean build files"
+	@echo ""
+	@echo "Variables:"
+	@echo "  WINE_PREFIX=$(WINE_PREFIX)"
+	@echo ""
+
+all: 64 32
+
+64: $(BUILD_DIR)/$(DLL64) $(BUILD_DIR)/$(SO64)
+	@echo "64-bit build complete"
+	@echo "  PE DLL:  $(BUILD_DIR)/$(DLL64)"
+	@echo "  Unix SO: $(BUILD_DIR)/$(SO64)"
+
+32: $(BUILD_DIR)/$(DLL32) $(BUILD_DIR)/$(SO32)
+	@echo "32-bit build complete"
+	@echo "  PE DLL:  $(BUILD_DIR)/$(DLL32)"
+	@echo "  Unix SO: $(BUILD_DIR)/$(SO32)"
+	@echo "  (Note: 32-bit files use 'wineasio' name, not 'wineasio32')"
+
+$(BUILD_DIR):
+	mkdir -p $(BUILD_DIR)
+
+# Create ntdll import library for 64-bit
+$(NTDLL_LIB64): $(NTDLL_DEF64) | $(BUILD_DIR)
+	@echo "Creating 64-bit ntdll import library..."
+	$(DLLTOOL64) -d $(NTDLL_DEF64) -l $@
+
+# Create ntdll import library for 32-bit (uses different def file for stdcall)
+$(NTDLL_LIB32): $(NTDLL_DEF32) | $(BUILD_DIR)
+	@echo "Creating 32-bit ntdll import library..."
+	$(DLLTOOL32) -d $(NTDLL_DEF32) -l $@
+
+# 64-bit PE DLL
+$(BUILD_DIR)/$(DLL64): $(PE_SOURCES) unixlib.h $(NTDLL_LIB64) | $(BUILD_DIR)
+	@echo "Building 64-bit PE DLL..."
+	$(MINGW64) $(PE_CFLAGS) -m64 \
+		-o $@ $(PE_SOURCES) \
+		$(NTDLL_LIB64) \
+		$(PE_LDFLAGS) $(PE_LIBS) \
+		-Wl,--out-implib,$(BUILD_DIR)/libwineasio64.a
+	@echo "Marking as Wine builtin..."
+	-$(WINEBUILD) --builtin $@ 2>/dev/null || true
+
+# 32-bit PE DLL
+# Note: We use wineasio.def to export functions without stdcall decoration
+# because Wine's LdrGetProcedureAddress looks for undecorated names
+$(BUILD_DIR)/$(DLL32): $(PE_SOURCES) unixlib.h $(NTDLL_LIB32) wineasio.def | $(BUILD_DIR)
+	@echo "Building 32-bit PE DLL..."
+	$(MINGW32) $(PE_CFLAGS) -m32 \
+		-o $@ $(PE_SOURCES) \
+		$(NTDLL_LIB32) \
+		$(PE_LDFLAGS) $(PE_LIBS) \
+		wineasio.def \
+		-Wl,--out-implib,$(BUILD_DIR)/libwineasio.a
+	@echo "Marking as Wine builtin..."
+	-$(WINEBUILD) --builtin $@ 2>/dev/null || true
+
+# 64-bit Unix .so
+$(BUILD_DIR)/$(SO64): $(UNIX_SOURCES) unixlib.h | $(BUILD_DIR)
+	@echo "Building 64-bit Unix .so..."
+	$(GCC) $(UNIX_CFLAGS) -m64 \
+		-o $@ $(UNIX_SOURCES) \
+		$(UNIX_LDFLAGS) $(UNIX_LIBS)
+
+# 32-bit Unix .so
+$(BUILD_DIR)/$(SO32): $(UNIX_SOURCES) unixlib.h | $(BUILD_DIR)
+	@echo "Building 32-bit Unix .so..."
+	$(GCC) $(UNIX_CFLAGS) -m32 \
+		-o $@ $(UNIX_SOURCES) \
+		$(UNIX_LDFLAGS) $(UNIX_LIBS)
+
+install: install64 install32 install-gui register
+	@echo ""
+	@echo "Installation complete!"
+	@echo ""
+	@echo "WineASIO Settings GUI installed to $(GUI_BIN_DIR)/wineasio-settings"
+	@echo "You can launch it from FL Studio's ASIO control panel button,"
+	@echo "or run 'wineasio-settings' from the command line."
+
+install64: $(BUILD_DIR)/$(DLL64) $(BUILD_DIR)/$(SO64)
+	@echo "Installing 64-bit WineASIO..."
+	sudo mkdir -p $(INSTALL_DIR64) $(INSTALL_UNIX64)
+	sudo cp $(BUILD_DIR)/$(DLL64) $(INSTALL_DIR64)/
+	sudo cp $(BUILD_DIR)/$(SO64) $(INSTALL_UNIX64)/
+	-sudo $(WINEBUILD) --builtin $(INSTALL_DIR64)/$(DLL64) 2>/dev/null || true
+	@echo "64-bit installation complete"
+
+install32: $(BUILD_DIR)/$(DLL32) $(BUILD_DIR)/$(SO32)
+	@echo "Installing 32-bit WineASIO..."
+	sudo mkdir -p $(INSTALL_DIR32) $(INSTALL_UNIX32)
+	sudo cp $(BUILD_DIR)/$(DLL32) $(INSTALL_DIR32)/
+	sudo cp $(BUILD_DIR)/$(SO32) $(INSTALL_UNIX32)/
+	-sudo $(WINEBUILD) --builtin $(INSTALL_DIR32)/$(DLL32) 2>/dev/null || true
+	@echo "32-bit installation complete"
+
+install-gui: build-gui-launchers
+	@echo "Installing WineASIO Settings GUI..."
+	sudo mkdir -p $(DESTDIR)$(GUI_BIN_DIR)
+	sudo mkdir -p $(DESTDIR)$(GUI_SHARE_DIR)
+	# Install Python files
+	sudo install -m 644 gui/settings.py $(DESTDIR)$(GUI_SHARE_DIR)/
+	sudo install -m 644 gui/ui_settings.py $(DESTDIR)$(GUI_SHARE_DIR)/
+	# Install launcher script
+	sudo install -m 755 gui/wineasio-settings $(DESTDIR)$(GUI_BIN_DIR)/
+	# Adjust PREFIX in launcher script
+	sudo sed -i "s?X-PREFIX-X?$(PREFIX)?" $(DESTDIR)$(GUI_BIN_DIR)/wineasio-settings
+	# Install Windows launcher executables (for use from FL Studio etc.)
+	sudo install -m 755 gui/wineasio-settings.exe $(DESTDIR)$(GUI_SHARE_DIR)/ 2>/dev/null || true
+	sudo install -m 755 gui/wineasio-settings64.exe $(DESTDIR)$(GUI_SHARE_DIR)/ 2>/dev/null || true
+	@echo "GUI installation complete"
+	@echo ""
+	@echo "To use the ASIO Control Panel from FL Studio or other DAWs:"
+	@echo "  1. The native Linux tool: $(GUI_BIN_DIR)/wineasio-settings"
+	@echo "  2. Windows launchers (copy to your DAW folder or run directly):"
+	@echo "     $(GUI_SHARE_DIR)/wineasio-settings.exe (32-bit)"
+	@echo "     $(GUI_SHARE_DIR)/wineasio-settings64.exe (64-bit)"
+
+build-gui-launchers:
+	@echo "Building Windows launcher executables..."
+	$(MAKE) -C gui launchers || echo "  (launcher build skipped - mingw not available)"
+
+uninstall-gui:
+	@echo "Removing WineASIO Settings GUI..."
+	sudo rm -f $(DESTDIR)$(GUI_BIN_DIR)/wineasio-settings
+	sudo rm -rf $(DESTDIR)$(GUI_SHARE_DIR)
+	@echo "GUI removed"
+
+register:
+	@echo ""
+	@echo "Registering WineASIO..."
+	@echo "  64-bit registration..."
+	-wine regsvr32 wineasio64.dll 2>/dev/null || true
+	@echo "  32-bit registration (using syswow64 regsvr32 for WoW64)..."
+	-wine ~/.wine/drive_c/windows/syswow64/regsvr32.exe wineasio.dll 2>/dev/null || true
+	@echo ""
+	@echo "Registration complete. You can verify with:"
+	@echo "  wine reg query 'HKLM\\Software\\ASIO\\WineASIO'"
+
+unregister:
+	@echo "Unregistering WineASIO..."
+	-wine regsvr32 /u wineasio64.dll 2>/dev/null || true
+	-wine ~/.wine/drive_c/windows/syswow64/regsvr32.exe /u wineasio.dll 2>/dev/null || true
+
+clean:
+	rm -rf $(BUILD_DIR)
+	@echo "Build directory cleaned"
+
+# Debug target - show paths and check tools
+debug:
+	@echo "=== WineASIO Wine 11 Build Configuration ==="
+	@echo ""
+	@echo "WINE_PREFIX = $(WINE_PREFIX)"
+	@echo ""
+	@echo "Compilers:"
+	@echo "  MINGW32 = $(MINGW32)"
+	@echo "  MINGW64 = $(MINGW64)"
+	@echo "  GCC     = $(GCC)"
+	@echo ""
+	@echo "PE Install paths:"
+	@echo "  32-bit: $(INSTALL_DIR32)"
+	@echo "  64-bit: $(INSTALL_DIR64)"
+	@echo ""
+	@echo "Unix Install paths:"
+	@echo "  32-bit: $(INSTALL_UNIX32)"
+	@echo "  64-bit: $(INSTALL_UNIX64)"
+	@echo ""
+	@echo "Checking tools..."
+	@which $(MINGW64) > /dev/null 2>&1 && echo "  [OK] $(MINGW64)" || echo "  [MISSING] $(MINGW64)"
+	@which $(MINGW32) > /dev/null 2>&1 && echo "  [OK] $(MINGW32)" || echo "  [MISSING] $(MINGW32)"
+	@which $(GCC) > /dev/null 2>&1 && echo "  [OK] $(GCC)" || echo "  [MISSING] $(GCC)"
+	@which $(WINEBUILD) > /dev/null 2>&1 && echo "  [OK] $(WINEBUILD)" || echo "  [MISSING] $(WINEBUILD)"
+	@echo ""
+	@echo "Checking Wine headers..."
+	@test -f $(WINE_PREFIX)/include/wine/unixlib.h && echo "  [OK] Wine unixlib.h found" || echo "  [MISSING] Wine unixlib.h"
+	@echo ""
+	@echo "Wine version:"
+	@wine --version 2>/dev/null || echo "  Wine not found in PATH"
+
+# Verify installation
+verify:
+	@echo "Checking installed files..."
+	@echo ""
+	@echo "64-bit PE DLL:"
+	@test -f $(INSTALL_DIR64)/$(DLL64) && echo "  [OK] $(INSTALL_DIR64)/$(DLL64)" || echo "  [MISSING]"
+	@echo "64-bit Unix SO:"
+	@test -f $(INSTALL_UNIX64)/$(SO64) && echo "  [OK] $(INSTALL_UNIX64)/$(SO64)" || echo "  [MISSING]"
+	@echo ""
+	@echo "32-bit PE DLL:"
+	@test -f $(INSTALL_DIR32)/$(DLL32) && echo "  [OK] $(INSTALL_DIR32)/$(DLL32)" || echo "  [MISSING]"
+	@echo "32-bit Unix SO:"
+	@test -f $(INSTALL_UNIX32)/$(SO32) && echo "  [OK] $(INSTALL_UNIX32)/$(SO32)" || echo "  [MISSING]"
+	@echo ""
+	@echo "Registry entries:"
+	@wine reg query "HKLM\\Software\\ASIO\\WineASIO" 2>/dev/null | grep -v "^[0-9a-f]*:" || echo "  [MISSING] ASIO driver not registered"
