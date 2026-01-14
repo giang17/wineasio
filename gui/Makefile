@@ -9,9 +9,31 @@ PREFIX = /usr
 PYUIC ?= pyuic5
 PYRCC ?= pyrcc5
 
+# MinGW compilers for Windows launcher
+MINGW32 = i686-w64-mingw32-gcc
+MINGW64 = x86_64-w64-mingw32-gcc
+
+# Windows launcher executables
+LAUNCHER_SRC = wineasio-settings-launcher.c
+LAUNCHER32 = wineasio-settings.exe
+LAUNCHER64 = wineasio-settings64.exe
+
 # ---------------------------------------------------------------------------------------------------------------------
 
-all:
+all: launchers
+
+launchers: $(LAUNCHER32) $(LAUNCHER64)
+	@echo "Windows launcher executables built"
+	@echo "  32-bit: $(LAUNCHER32)"
+	@echo "  64-bit: $(LAUNCHER64)"
+
+$(LAUNCHER32): $(LAUNCHER_SRC)
+	@echo "Building 32-bit Windows launcher..."
+	$(MINGW32) -o $@ $< -mwindows -O2
+
+$(LAUNCHER64): $(LAUNCHER_SRC)
+	@echo "Building 64-bit Windows launcher..."
+	$(MINGW64) -o $@ $< -mwindows -O2
 
 # ---------------------------------------------------------------------------------------------------------------------
 # UI code
@@ -56,14 +78,14 @@ ui_%.py: %.ui
 # ---------------------------------------------------------------------------------------------------------------------
 
 clean:
-	rm -f *~ *.pyc
+	rm -f *~ *.pyc $(LAUNCHER32) $(LAUNCHER64)
 
 destroy: clean
 	rm -f ui_*.py
 
 # ---------------------------------------------------------------------------------------------------------------------
 
-install:
+install: launchers
 	# Create directories
 	install -d $(DESTDIR)$(PREFIX)/bin/
 	install -d $(DESTDIR)$(PREFIX)/share/wineasio/
@@ -79,6 +101,21 @@ install:
 
 	# Install code
 	install -m 644 *.py $(DESTDIR)$(PREFIX)/share/wineasio/
+
+	# Install Windows launcher executables (for use from Wine apps like FL Studio)
+	install -m 755 $(LAUNCHER32) $(DESTDIR)$(PREFIX)/share/wineasio/
+	install -m 755 $(LAUNCHER64) $(DESTDIR)$(PREFIX)/share/wineasio/
+
+	@echo ""
+	@echo "Installation complete!"
+	@echo ""
+	@echo "Native Linux GUI: $(PREFIX)/bin/wineasio-settings"
+	@echo "Windows launchers (for FL Studio etc.):"
+	@echo "  $(PREFIX)/share/wineasio/$(LAUNCHER32)"
+	@echo "  $(PREFIX)/share/wineasio/$(LAUNCHER64)"
+	@echo ""
+	@echo "To use from FL Studio, copy the appropriate .exe to your Wine prefix:"
+	@echo "  cp $(PREFIX)/share/wineasio/$(LAUNCHER64) ~/.wine/drive_c/Program\ Files/WineASIO/"
 
 # ---------------------------------------------------------------------------------------------------------------------
 
