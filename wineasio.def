@@ -1,0 +1,9 @@
+; WineASIO DLL Export Definitions
+; This file ensures exports use undecorated names for Wine compatibility
+LIBRARY wineasio
+EXPORTS
+    DllCanUnloadNow
+    DllGetClassObject
+    DllMain
+    DllRegisterServer
+    DllUnregisterServer
