@@ -3,7 +3,7 @@
 WineASIO provides an ASIO to JACK driver for WINE.  
 ASIO is the most common Windows low-latency driver, so is commonly used in audio workstation programs.
 
-You can, for example, use with FL Studio, Ableton Live, Reaper, and other DAWs under GNU/Linux systems (together with JACK).
+You can, for example, use with FL Studio, EZkeys, UVI Workstation, and other Programs (together with JACK).
 
 ![Screenshot](screenshot.png)
 
