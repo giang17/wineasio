@@ -559,8 +559,8 @@ which wineasio-settings
 
 ## Authors
 
-Wine 11 port implemented January 2025, one day after Wine 11's official release (January 13, 2025).
+Wine 11 port implemented January 2026, one day after Wine 11's official release (January 13, 2026).
 
-Control Panel GUI integration added January 2025.
+Control Panel GUI integration added January 2026.
 
-JACK MIDI support added January 2025.
+JACK MIDI support added January 2026.
