@@ -1,6 +1,6 @@
 # WineASIO 1.4.0 Release Notes
 
-**Release Date:** January 2025  
+**Release Date:** January 2026  
 **Codename:** Wine 11 Edition
 
 ---
