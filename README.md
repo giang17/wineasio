@@ -5,7 +5,11 @@ ASIO is the most common Windows low-latency driver, so is commonly used in audio
 
 You can, for example, use with FL Studio, Ableton Live, Reaper, and other DAWs under GNU/Linux systems (together with JACK).
 
-![Screenshot](screenshot.png)
+<p align="center">
+  <img src="screenshot.png" alt="FL Studio 2025 with WineASIO Settings" width="800">
+</p>
+
+*FL Studio 2025 running on Wine 11 with WineASIO and the Settings GUI*
 
 ---
 
