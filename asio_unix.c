@@ -1194,6 +1194,7 @@ static NTSTATUS asio_future(void *args)
 }
 
 /* Unix function table */
+__attribute__((visibility("default")))
 const unixlib_entry_t __wine_unix_call_funcs[] =
 {
     asio_init,
@@ -1221,6 +1222,7 @@ C_ASSERT(ARRAYSIZE(__wine_unix_call_funcs) == unix_funcs_count);
 
 #ifdef _WIN64
 /* WoW64 thunks would go here if needed */
+__attribute__((visibility("default")))
 const unixlib_entry_t __wine_unix_call_wow64_funcs[] =
 {
     asio_init,
