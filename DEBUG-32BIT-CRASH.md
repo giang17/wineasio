@@ -1,10 +1,11 @@
 # WineASIO 32-bit NULL Pointer Crash - Debug Progress
 
-## Status: CRITICAL BUG IDENTIFIED
+## Status: VTABLE INSTRUMENTATION ADDED - READY FOR TESTING
 
 **Last Updated:** 2025-01-20  
 **Branch:** `wine11-32bit-test`  
 **Severity:** High - Affects all 32-bit ASIO hosts
+**Current Phase:** vtable Runtime Debugging
 
 ---
 
@@ -146,21 +147,51 @@ static const IWineASIOVtbl WineASIO_Vtbl = {
 - [x] Tested 64-bit WineASIO - Works perfectly
 - [x] Tested multiple 32-bit hosts - All crash identically
 
+### 4. vtable Runtime Instrumentation ✅
+- [x] Added complete vtable pointer dump in `WineASIOCreateInstance`
+- [x] Shows all 24 function pointers with hex addresses and offsets
+- [x] Added WARN-level entry/exit logging to all ASIO functions
+- [x] Logs show which function is called immediately after Init
+- [x] Build scripts created: `install-32bit-debug.sh`, `test-reaper-32bit-vtable.sh`
+
 ---
 
 ## Next Steps for Debugging
 
-### Priority 1: Test Legacy WineASIO
+### Priority 1: Run vtable Debug Test ⏳ IN PROGRESS
+**Goal**: Identify exact function pointer that is NULL/invalid
+
+**Status**: Instrumentation added, ready to test
+
+**Steps to execute:**
+```bash
+cd ~/docker-workspace/wineasio-fork
+
+# 1. Install debug build (requires sudo password)
+./install-32bit-debug.sh
+
+# 2. Run REAPER with vtable logging
+./test-reaper-32bit-vtable.sh
+```
+
+**Expected Output:**
+- `=== VTABLE DUMP ===` with all 24 function pointers
+- `>>> CALLED: Init` when initialization happens
+- `>>> CALLED: <function>` showing next function after Init
+- Crash with EIP address matching a vtable offset
+
+**Analysis:**
+- Compare crash EIP with vtable offsets (0x00, 0x04, 0x08, etc.)
+- If crash at 0x00 or NULL: function pointer is actually NULL
+- If crash at 0x3C (60): `GetClockSources` function issue
+- Check which `>>> CALLED:` appears last before crash
+
+### Priority 2: Test Legacy WineASIO (If Needed)
 **Goal**: Determine if bug is in Wine 11 port or pre-existing
 
-The legacy WineASIO (without PE/Unix split) worked with Wine 6-10. We should:
-1. Checkout legacy branch or old tag
-2. Build with old Makefile (not Makefile.wine11)
-3. Test with wine-stable on 32-bit apps
-4. **If legacy works**: Bug is in Wine 11 port (PE/Unix architecture)
-5. **If legacy crashes**: Bug was pre-existing (deeper ASIO issue)
+Only proceed if vtable dump shows valid pointers but still crashes.
 
-**Command to test legacy:**
+The legacy WineASIO (without PE/Unix split) worked with Wine 6-10:
 ```bash
 cd wineasio-fork
 git checkout v1.3.0  # Last pre-Wine-11 version
@@ -171,20 +202,15 @@ wine regsvr32 wineasio32.dll
 # Test with REAPER 32-bit
 ```
 
-### Priority 2: vtable Deep Inspection
-1. **Dump vtable at runtime** - Add debug code to print all function pointers
-2. **Compare with ASIO SDK** - Verify vtable layout matches standard
-3. **Check calling conventions** - Ensure STDMETHODCALLTYPE is correct for 32-bit
-4. **Verify void returns** - `GetDriverName` and `GetErrorMessage` return void (unusual for COM)
+### Priority 3: Calling Convention Deep Dive (If Needed)
+If vtable pointers are valid but crash happens:
+1. **Check stdcall decorations** - 32-bit uses `@bytes` suffix
+2. **Verify STDMETHODCALLTYPE** - Must be stdcall on 32-bit Windows
+3. **Check .def export names** - May need decorated names
+4. **Verify thunk layer** - PE→Unix calling convention translation
 
-### Priority 3: Minimal Test Case
-Create a minimal 32-bit ASIO host that:
-1. Calls `CoCreateInstance` to instantiate WineASIO
-2. Calls `Init(NULL)`
-3. Attempts to call next function in sequence
-4. Prints vtable addresses before each call
-
-This would isolate the exact failing function.
+### Priority 4: Minimal Test Case (If All Else Fails)
+Create isolated 32-bit ASIO host to test vtable directly
 
 ---
 
@@ -192,12 +218,19 @@ This would isolate the exact failing function.
 
 ### Key Files
 - **PE side (Windows)**: `asio_pe.c` - Lines 800-826 (vtable definition)
+  - Line 847-875: vtable dump instrumentation (NEW)
+  - Lines 429-715: WARN-level function entry/exit logging (NEW)
 - **Unix side (Linux)**: `asio_unix.c` - All asio_* functions
 - **Interface definition**: `unixlib.h` - Function enum and params
 - **Build system**: `Makefile.wine11`
 
-### Modified Files (Uncommitted)
-- None currently - all changes committed to `wine11-32bit-test` branch
+### Test Scripts (NEW)
+- `install-32bit-debug.sh` - Install debug build to wine-stable
+- `test-reaper-32bit-vtable.sh` - Run REAPER with vtable logging
+
+### Modified Files
+- `asio_pe.c` - vtable dump and function call logging added
+- Changes committed to `wine11-32bit-test` branch
 
 ---
 
@@ -225,23 +258,41 @@ This would isolate the exact failing function.
 
 ---
 
-## Questions for Next Session
+## Questions to Answer with vtable Test
 
-1. **Does legacy WineASIO (pre-Wine-11) work with 32-bit apps?**
-   - If YES: Bug is in Wine 11 PE/Unix split implementation
-   - If NO: Bug was pre-existing (may never have worked)
+1. **Which function pointer is NULL or invalid?**
+   - vtable dump will show all 24 function pointers
+   - Compare with crash EIP to identify exact function
 
-2. **What is the EXACT function being called when crash occurs?**
-   - Need to dump vtable addresses at runtime
-   - Compare with crash EIP address
+2. **What function is called immediately after Init?**
+   - `>>> CALLED:` logs will show the sequence
+   - Standard ASIO sequence: Init → GetChannels → GetBufferSize → ...
+   - If crash before any `>>> CALLED:`, vtable access itself is failing
 
-3. **Are there any working 32-bit ASIO drivers on Wine 11?**
-   - Test with ASIO4ALL or other native Windows ASIO drivers
-   - Would confirm if it's WineASIO-specific or Wine-wide
+3. **Is the crash address 0x00 (NULL) or a vtable offset?**
+   - If EIP = 0x00000000: Function pointer is literally NULL
+   - If EIP = 0x00000060: Trying to execute data at offset 0x60
+   - If EIP = valid address: Calling convention mismatch
 
-4. **Is the ASIO COM interface definition correct?**
-   - Compare with official Steinberg ASIO SDK
-   - Check if any methods changed between ASIO versions
+4. **Do all vtable entries point to valid code?**
+   - vtable dump shows each function's address
+   - All should be non-zero and in PE code section
+   - If any are 0x00000000: Missing implementation
+
+## Expected vtable Dump Format
+```
+=== VTABLE DUMP (pAsio=0x..., lpVtbl=0x...) ===
+vtable[0x00] QueryInterface   = 0x7b4xxxxx
+vtable[0x04] AddRef            = 0x7b4xxxxx
+vtable[0x08] Release           = 0x7b4xxxxx
+vtable[0x0C] Init              = 0x7b4xxxxx
+vtable[0x10] GetDriverName     = 0x7b4xxxxx
+...
+vtable[0x5C] OutputReady       = 0x7b4xxxxx
+=== END VTABLE DUMP ===
+```
+
+If any entry shows `= 0x00000000` or `= (nil)`, that's the bug!
 
 ---
 
