@@ -3,7 +3,7 @@
 WineASIO provides an ASIO to JACK driver for WINE.  
 ASIO is the most common Windows low-latency driver, so is commonly used in audio workstation programs.
 
-You can, for example, use with FL Studio, Ableton Live, Reaper, and other DAWs under GNU/Linux systems (together with JACK).
+You can, for example, use with FL Studio, EZkeys, UVI Workstation, and other Programs (together with JACK).
 
 <p align="center">
   <img src="screenshot.png" alt="FL Studio 2025 with WineASIO Settings" width="800">
@@ -17,7 +17,7 @@ You can, for example, use with FL Studio, Ableton Live, Reaper, and other DAWs u
 
 **WineASIO now supports Wine 11!**
 
-Wine 11 (released January 13, 2025) introduced a new DLL architecture that separates PE (Windows) code from Unix code. This required a complete rewrite of WineASIO's build system and internal architecture.
+Wine 11 (released January 13, 2026) introduced a new DLL architecture that separates PE (Windows) code from Unix code. This required a complete rewrite of WineASIO's build system and internal architecture.
 
 ### Wine Version Compatibility
 
@@ -389,7 +389,7 @@ wineasio-1.3.0/
 
 ## Change Log
 
-### 1.4.0 (Wine 11 Port) - January 2025
+### 1.4.0 (Wine 11 Port) - January 2026
 * **NEW:** Full Wine 11 support with new PE/Unix split architecture
 * **NEW:** `Makefile.wine11` for building with Wine 10.2+/11
 * **NEW:** Separate PE DLL and Unix SO builds
@@ -447,7 +447,7 @@ Portions copyright (C) 2010 Nedko Arnaudov
 Portions copyright (C) 2011 Christian Schoenebeck  
 Portions copyright (C) 2013 Joakim Hernberg  
 Portions copyright (C) 2020-2023 Filipe Coelho  
-Portions copyright (C) 2025 Wine 11 Port Contributors
+Portions copyright (C) 2026 Wine 11 Port Contributors
 
 The WineASIO library code is licensed under LGPL v2.1, see COPYING.LIB for more details.  
 The WineASIO settings UI code is licensed under GPL v2+, see COPYING.GUI for more details.
