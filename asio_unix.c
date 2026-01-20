@@ -383,8 +383,11 @@ static int jack_process_callback(jack_nframes_t nframes, void *arg)
         if (stream->inputs[i].active && stream->inputs[i].port) {
             void *jack_buf = pjack_port_get_buffer(stream->inputs[i].port, nframes);
             if (jack_buf && stream->inputs[i].audio_buffer) {
+                TRACE("Copying input %d, buffer=%p, index=%d\n", i, stream->inputs[i].audio_buffer, stream->buffer_index);
                 memcpy(&stream->inputs[i].audio_buffer[nframes * stream->buffer_index],
                        jack_buf, sizeof(jack_default_audio_sample_t) * nframes);
+            } else {
+                WARN("Input %d: jack_buf=%p, audio_buffer=%p\n", i, jack_buf, stream->inputs[i].audio_buffer);
             }
         }
     }
@@ -394,9 +397,12 @@ static int jack_process_callback(jack_nframes_t nframes, void *arg)
         if (stream->outputs[i].active && stream->outputs[i].port) {
             void *jack_buf = pjack_port_get_buffer(stream->outputs[i].port, nframes);
             if (jack_buf && stream->outputs[i].audio_buffer) {
+                TRACE("Copying output %d, buffer=%p, index=%d\n", i, stream->outputs[i].audio_buffer, stream->buffer_index);
                 memcpy(jack_buf,
                        &stream->outputs[i].audio_buffer[nframes * stream->buffer_index],
                        sizeof(jack_default_audio_sample_t) * nframes);
+            } else {
+                WARN("Output %d: jack_buf=%p, audio_buffer=%p\n", i, jack_buf, stream->outputs[i].audio_buffer);
             }
         }
     }
@@ -470,6 +476,7 @@ static AsioStream *handle_to_stream(asio_handle h)
 
 static NTSTATUS asio_init(void *args)
 {
+    TRACE("%s called\n", __func__);
     struct asio_init_params *params = args;
     AsioStream *stream;
     jack_status_t status;
@@ -634,6 +641,7 @@ static NTSTATUS asio_init(void *args)
 
 static NTSTATUS asio_exit(void *args)
 {
+    TRACE("%s called\n", __func__);
     struct asio_exit_params *params = args;
     AsioStream *stream = handle_to_stream(params->handle);
     int i;
@@ -692,11 +700,15 @@ static NTSTATUS asio_exit(void *args)
 
 static NTSTATUS asio_start(void *args)
 {
+    TRACE("%s called\n", __func__);
     struct asio_start_params *params = args;
     AsioStream *stream = handle_to_stream(params->handle);
     int i;
     
+    TRACE("asio_start called: stream=%p, state=%d\n", stream, stream ? stream->state : -1);
+    
     if (!stream || stream->state != Prepared) {
+        ERR("Invalid stream or state for start: stream=%p, state=%d\n", stream, stream ? stream->state : -1);
         params->result = ASE_InvalidMode;
         return STATUS_SUCCESS;
     }
@@ -728,6 +740,7 @@ static NTSTATUS asio_start(void *args)
 
 static NTSTATUS asio_stop(void *args)
 {
+    TRACE("%s called\n", __func__);
     struct asio_stop_params *params = args;
     AsioStream *stream = handle_to_stream(params->handle);
     
@@ -746,6 +759,7 @@ static NTSTATUS asio_stop(void *args)
 
 static NTSTATUS asio_get_channels(void *args)
 {
+    TRACE("%s called\n", __func__);
     struct asio_get_channels_params *params = args;
     AsioStream *stream = handle_to_stream(params->handle);
     
@@ -763,6 +777,7 @@ static NTSTATUS asio_get_channels(void *args)
 
 static NTSTATUS asio_get_latencies(void *args)
 {
+    TRACE("%s called\n", __func__);
     struct asio_get_latencies_params *params = args;
     AsioStream *stream = handle_to_stream(params->handle);
     jack_latency_range_t range;
@@ -795,6 +810,7 @@ static NTSTATUS asio_get_latencies(void *args)
 
 static NTSTATUS asio_get_buffer_size(void *args)
 {
+    TRACE("%s called\n", __func__);
     struct asio_get_buffer_size_params *params = args;
     AsioStream *stream = handle_to_stream(params->handle);
     
@@ -822,6 +838,7 @@ static NTSTATUS asio_get_buffer_size(void *args)
 
 static NTSTATUS asio_can_sample_rate(void *args)
 {
+    TRACE("%s called\n", __func__);
     struct asio_can_sample_rate_params *params = args;
     AsioStream *stream = handle_to_stream(params->handle);
     
@@ -842,6 +859,7 @@ static NTSTATUS asio_can_sample_rate(void *args)
 
 static NTSTATUS asio_get_sample_rate(void *args)
 {
+    TRACE("%s called\n", __func__);
     struct asio_get_sample_rate_params *params = args;
     AsioStream *stream = handle_to_stream(params->handle);
     
@@ -858,6 +876,7 @@ static NTSTATUS asio_get_sample_rate(void *args)
 
 static NTSTATUS asio_set_sample_rate(void *args)
 {
+    TRACE("%s called\n", __func__);
     struct asio_set_sample_rate_params *params = args;
     AsioStream *stream = handle_to_stream(params->handle);
     
@@ -878,6 +897,7 @@ static NTSTATUS asio_set_sample_rate(void *args)
 
 static NTSTATUS asio_get_channel_info(void *args)
 {
+    TRACE("%s called\n", __func__);
     struct asio_get_channel_info_params *params = args;
     AsioStream *stream = handle_to_stream(params->handle);
     int channel = params->info.channel;
@@ -917,13 +937,18 @@ static NTSTATUS asio_get_channel_info(void *args)
 
 static NTSTATUS asio_create_buffers(void *args)
 {
+    TRACE("%s called\n", __func__);
     struct asio_create_buffers_params *params = args;
     AsioStream *stream = handle_to_stream(params->handle);
     struct asio_buffer_info *infos = params->buffer_infos;
     int i, j;
     size_t buffer_bytes;
     
+    TRACE("asio_create_buffers called: stream=%p, num_channels=%d, buffer_size=%d\n", 
+          stream, params->num_channels, params->buffer_size);
+    
     if (!stream || stream->state < Initialized) {
+        ERR("Invalid stream or state: stream=%p, state=%d\n", stream, stream ? stream->state : -1);
         params->result = ASE_InvalidMode;
         return STATUS_SUCCESS;
     }
@@ -967,6 +992,10 @@ static NTSTATUS asio_create_buffers(void *args)
             /* Return buffer pointers */
             infos[i].buffer_ptr[0] = (UINT64)(UINT_PTR)&stream->inputs[ch].audio_buffer[0];
             infos[i].buffer_ptr[1] = (UINT64)(UINT_PTR)&stream->inputs[ch].audio_buffer[stream->buffer_size];
+            TRACE("Input channel %d: buffer=%p, ptr[0]=0x%llx, ptr[1]=0x%llx\n",
+                  ch, stream->inputs[ch].audio_buffer, 
+                  (unsigned long long)infos[i].buffer_ptr[0],
+                  (unsigned long long)infos[i].buffer_ptr[1]);
         } else {
             if (ch < 0 || ch >= stream->num_outputs) {
                 params->result = ASE_InvalidParameter;
@@ -988,6 +1017,10 @@ static NTSTATUS asio_create_buffers(void *args)
             /* Return buffer pointers */
             infos[i].buffer_ptr[0] = (UINT64)(UINT_PTR)&stream->outputs[ch].audio_buffer[0];
             infos[i].buffer_ptr[1] = (UINT64)(UINT_PTR)&stream->outputs[ch].audio_buffer[stream->buffer_size];
+            TRACE("Output channel %d: buffer=%p, ptr[0]=0x%llx, ptr[1]=0x%llx\n",
+                  ch, stream->outputs[ch].audio_buffer,
+                  (unsigned long long)infos[i].buffer_ptr[0],
+                  (unsigned long long)infos[i].buffer_ptr[1]);
         }
     }
     
@@ -1010,6 +1043,7 @@ static NTSTATUS asio_create_buffers(void *args)
 
 static NTSTATUS asio_dispose_buffers(void *args)
 {
+    TRACE("%s called\n", __func__);
     struct asio_dispose_buffers_params *params = args;
     AsioStream *stream = handle_to_stream(params->handle);
     int i;
@@ -1045,6 +1079,7 @@ static NTSTATUS asio_dispose_buffers(void *args)
 
 static NTSTATUS asio_output_ready(void *args)
 {
+    TRACE("%s called\n", __func__);
     struct asio_output_ready_params *params = args;
     
     /* We don't need this optimization since JACK handles timing */
@@ -1055,6 +1090,7 @@ static NTSTATUS asio_output_ready(void *args)
 
 static NTSTATUS asio_get_sample_position(void *args)
 {
+    TRACE("%s called\n", __func__);
     struct asio_get_sample_position_params *params = args;
     AsioStream *stream = handle_to_stream(params->handle);
     
@@ -1072,6 +1108,7 @@ static NTSTATUS asio_get_sample_position(void *args)
 
 static NTSTATUS asio_get_callback(void *args)
 {
+    TRACE("%s called\n", __func__);
     struct asio_get_callback_params *params = args;
     AsioStream *stream = handle_to_stream(params->handle);
     
@@ -1113,6 +1150,7 @@ static NTSTATUS asio_get_callback(void *args)
 
 static NTSTATUS asio_callback_done(void *args)
 {
+    TRACE("%s called\n", __func__);
     struct asio_callback_done_params *params = args;
     /* Currently unused - the callback is processed synchronously */
     params->result = ASE_OK;
@@ -1121,6 +1159,7 @@ static NTSTATUS asio_callback_done(void *args)
 
 static NTSTATUS asio_control_panel(void *args)
 {
+    TRACE("%s called\n", __func__);
     struct asio_control_panel_params *params = args;
     pid_t pid;
     
@@ -1156,6 +1195,7 @@ static NTSTATUS asio_control_panel(void *args)
 
 static NTSTATUS asio_future(void *args)
 {
+    TRACE("%s called\n", __func__);
     struct asio_future_params *params = args;
     AsioStream *stream = handle_to_stream(params->handle);
     
