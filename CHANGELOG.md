@@ -7,6 +7,53 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.4.1] - 2026-01-21
+
+### Added
+
+- **test_asio_minimal.c** - Diagnostic tool to verify WineASIO works independently
+  - Minimal ASIO host program for testing
+  - Proves 32-bit WineASIO works correctly
+  - Helps isolate application-specific issues from WineASIO bugs
+
+### Changed
+
+- **Documentation cleanup** - Removed temporary debug files
+  - Consolidated debug documentation into DEVELOPMENT.md
+  - Cleaned up test scripts and temporary files
+  - All removed files remain in git history
+
+### Fixed
+
+- **Documentation accuracy** - Updated all dates to 2026
+- **Release notes** - Enhanced troubleshooting for Berkeley DB issues
+- **README** - Added Berkeley DB crash workaround section
+
+### Documentation
+
+- Created **CHANGELOG.md** - Complete version history
+- Enhanced **DEVELOPMENT.md** - Comprehensive developer guide with:
+  - Build instructions
+  - PE/Unix architecture explanation
+  - Testing procedures
+  - Code structure overview
+- Updated **RELEASE_NOTES.md** - Clarified 32-bit testing results
+- Updated **TEST-RESULTS.md** - Documented successful 32-bit verification
+
+### Testing
+
+- **32-bit verification complete** - Extensive testing confirms:
+  - vtable is valid (no NULL pointers)
+  - COM interface works correctly
+  - All ASIO functions execute without crashes
+  - Berkeley DB crashes are Wine compatibility issues, not WineASIO bugs
+
+### Notes
+
+This is a maintenance release after v1.4.0, adding documentation improvements, testing verification, and diagnostic tools. No code changes to the core WineASIO implementation.
+
+---
+
 ## [1.4.0] - 2026-01-21
 
 ### Added
@@ -204,5 +251,6 @@ https://github.com/wineasio/wineasio
 
 ---
 
+[1.4.1]: https://github.com/giang17/wineasio/releases/tag/v1.4.1
 [1.4.0]: https://github.com/giang17/wineasio/releases/tag/v1.4.0
 [1.3.0]: https://github.com/wineasio/wineasio/releases/tag/v1.3.0
