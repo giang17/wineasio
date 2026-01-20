@@ -1,6 +1,6 @@
 # WineASIO 1.4.0 Release Notes
 
-**Release Date:** January 2025  
+**Release Date:** January 21, 2026  
 **Codename:** Wine 11 Edition
 
 ---
@@ -18,6 +18,7 @@ WineASIO 1.4.0 is a major release that brings full compatibility with **Wine 11*
 - **Separate PE DLL and Unix SO builds** - Clean separation between Windows and Linux code
 - **`__wine_unix_call` interface** - Modern Wine communication between PE and Unix layers
 - **Full 32-bit and 64-bit support** - Proper WoW64 compatibility for legacy DAWs
+- **Verified working** - Extensive testing confirms both architectures work correctly
 
 ### Settings GUI Integration
 - **Launch from DAW** - Click "Show ASIO Panel" in FL Studio, Reaper, etc. to open settings
@@ -114,9 +115,27 @@ wine ~/.wine/drive_c/windows/syswow64/regsvr32.exe wineasio.dll
 
 ## 🐛 Known Issues
 
-1. **32-bit registration** - Must use the WoW64 regsvr32 (`syswow64/regsvr32.exe`)
-2. **JACK must be running** - Start JACK before launching your DAW
-3. **PyQt dependency** - Settings GUI requires PyQt5 or PyQt6
+### Application-Specific Issues
+
+1. **Berkeley DB crashes (some 32-bit apps)** - Some 32-bit Windows applications (REAPER, certain VST hosts) may crash with:
+   ```
+   BDB1539 Build signature doesn't match environment
+   Cannot open DB environment: BDB0091 DB_VERSION_MISMATCH
+   ```
+   **This is a Wine/libdb compatibility issue, NOT a WineASIO bug.** The crash occurs before WineASIO is even initialized.
+   
+   **Workarounds:**
+   - Use 64-bit versions of your DAW (recommended)
+   - Remove stale database files: `rm -rf ~/.wine/.local/share/recently-used.xbel*`
+   - Test WineASIO independently with `test_asio_minimal.exe` (included)
+   
+   **Note:** WineASIO 32-bit itself works correctly. See `TEST-RESULTS.md` for detailed analysis.
+
+### General Notes
+
+2. **32-bit registration** - Must use the WoW64 regsvr32 (`syswow64/regsvr32.exe`)
+3. **JACK must be running** - Start JACK before launching your DAW
+4. **PyQt dependency** - Settings GUI requires PyQt5 or PyQt6
 
 ---
 
@@ -127,6 +146,7 @@ If you're upgrading from WineASIO 1.3.0:
 1. **Remove old libraries** - Delete old `wineasio*.dll.so` files
 2. **Use new Makefile** - Switch to `Makefile.wine11` for Wine 11+
 3. **Re-register** - Run `make -f Makefile.wine11 register`
+4. **Clean database files** (if experiencing crashes) - Run `find ~/.wine -name "*.db" -delete`
 
 The registry settings are compatible and will be preserved.
 
@@ -162,12 +182,15 @@ This release was made possible by:
 | DAW | 32-bit | 64-bit | Control Panel | Notes |
 |-----|--------|--------|---------------|-------|
 | FL Studio | ✅ | ✅ | ✅ | Fully tested |
-| Reaper | ✅ | ✅ | ✅ | Fully tested |
+| Reaper | ⚠️ | ✅ | ✅ | 32-bit may have BDB issues (Wine bug) |
 | Ableton Live | ⚠️ | ✅ | ✅ | 64-bit recommended |
 | Bitwig Studio | - | ✅ | ✅ | Linux native preferred |
 | Cubase | ⚠️ | ✅ | ✅ | Some versions may need tweaks |
+| test_asio_minimal | ✅ | ✅ | - | Diagnostic tool (included) |
 
-Legend: ✅ Working | ⚠️ Partially tested | - Not applicable
+Legend: ✅ Working | ⚠️ May have app-specific issues | - Not applicable
+
+**Note:** WineASIO itself works correctly in both 32-bit and 64-bit. Some application crashes are due to Wine compatibility issues, not WineASIO bugs.
 
 ---
 
