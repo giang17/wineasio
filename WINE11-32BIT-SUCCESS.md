@@ -112,15 +112,21 @@ Unhandled exception: page fault on execute access to 0x00000000
 EIP:00000000 (NULL pointer execution)
 ```
 
-**Important Finding**: This crash happens with **both** our Custom Wine 11 build AND wine-stable package!
+**Important Finding**: This crash is **WineASIO-specific**, NOT Wine-specific!
+
+**Test Results**:
+- ✅ CFX Lite 32-bit **WITHOUT** WineASIO + Custom Wine 11: **Works** (shows "Last audio devices listing failed" but doesn't crash)
+- ❌ CFX Lite 32-bit **WITH** WineASIO + Custom Wine 11: **Crashes**
+- ❌ CFX Lite 32-bit **WITH** WineASIO + wine-stable: **Crashes**
 
 **Analysis**:
 - WineASIO loads successfully (visible in crash dump)
-- Crash occurs at NULL pointer (0x00000000)
+- Crash occurs at NULL pointer (0x00000000) during ASIO initialization
 - Likely a NULL callback pointer in ASIO initialization
-- **Not caused by our WineASIO changes or Wine build**
+- **The problem is in WineASIO's interaction with CFX Lite**, not in Wine itself
+- Both "new WoW64" (Custom Wine) and "old WoW64" (wine-stable) exhibit the same crash
 
-**Workaround**: CFX Lite 32-bit works without WineASIO (shows "Last audio devices listing failed" error but doesn't crash)
+**Conclusion**: This is a WineASIO compatibility issue with CFX Lite 32-bit, not a Wine build issue
 
 **Next Steps**: Test with other 32-bit ASIO applications to verify if this is CFX-specific or general
 
@@ -197,8 +203,9 @@ x86_64-unix/     → Shared 64-bit Unix libraries
 | Wine 11 Custom Build + WineASIO 64-bit | ✅ Works | Fully tested |
 | Wine 11 Custom Build + WineASIO 32-bit | ✅ Works | Registers successfully |
 | wine-stable + WineASIO 32-bit | ✅ Works | Registration OK |
-| CFX Lite 32-bit + WineASIO | ❌ Crashes | NULL pointer bug (not our fault) |
-| CFX Lite 32-bit without WineASIO | ✅ Works | Shows error dialog but runs |
+| Custom Wine 11 + CFX Lite 32-bit (no WineASIO) | ✅ Works | Shows error but runs |
+| Custom Wine 11 + CFX Lite 32-bit + WineASIO | ❌ Crashes | NULL pointer in WineASIO |
+| wine-stable + CFX Lite 32-bit + WineASIO | ❌ Crashes | Same NULL pointer crash |
 
 ---
 

@@ -38,12 +38,16 @@
 ## ⚠️ Known Issues
 
 ### CFX Lite 32-bit Compatibility
-- **Issue**: CFX Lite 32-bit crashes with WineASIO loaded
+- **Issue**: CFX Lite 32-bit crashes when WineASIO is loaded
 - **Error**: NULL pointer execution at address 0x00000000
-- **Impact**: Crashes with both Custom Wine 11 and wine-stable
-- **Root Cause**: NOT our WineASIO build - likely CFX Lite bug or ASIO API issue
-- **Workaround**: CFX Lite works without WineASIO (shows error but doesn't crash)
-- **Status**: Needs further investigation with other 32-bit ASIO apps
+- **Behavior**:
+  - ✅ CFX Lite 32-bit + Custom Wine 11 **WITHOUT** WineASIO: Works (shows error dialog)
+  - ❌ CFX Lite 32-bit + Custom Wine 11 **WITH** WineASIO: Crashes
+  - ❌ CFX Lite 32-bit + wine-stable **WITH** WineASIO: Crashes (same crash)
+- **Root Cause**: WineASIO compatibility issue with CFX Lite, NOT a Wine build issue
+- **Impact**: Both "new WoW64" and "old WoW64" exhibit the same crash
+- **Workaround**: Use CFX Lite without WineASIO (shows "Last audio devices listing failed" but runs)
+- **Status**: Needs testing with other 32-bit ASIO apps to determine if CFX-specific
 
 ---
 
