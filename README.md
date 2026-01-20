@@ -310,6 +310,34 @@ sudo winebuild --builtin /opt/wine-stable/lib/wine/x86_64-windows/wineasio64.dll
 - `wineasio.so` is in `i386-unix/`
 - Register with 32-bit regsvr32: `wine ~/.wine/drive_c/windows/syswow64/regsvr32.exe wineasio.dll`
 
+### Berkeley DB crashes (some 32-bit apps)
+
+**Error message:**
+```
+BDB1539 Build signature doesn't match environment
+Cannot open DB environment: BDB0091 DB_VERSION_MISMATCH
+```
+
+**What's happening:**
+- This is a Wine/libdb compatibility issue, **NOT a WineASIO bug**
+- Some 32-bit applications (REAPER, some VST hosts) use GTK+ which depends on Berkeley DB
+- System libdb version may conflict with Wine's expectations
+- The crash occurs **before** WineASIO is initialized
+
+**Workaround:**
+1. **Use 64-bit versions** of your DAW/plugins (recommended)
+2. **Remove stale DB files:**
+   ```sh
+   rm -rf ~/.wine/.local/share/recently-used.xbel*
+   find ~/.wine -name "*.db" -delete
+   ```
+3. **Test WineASIO separately:** Use the included `test_asio_minimal.exe` to verify WineASIO works:
+   ```sh
+   wine test_asio_minimal.exe
+   ```
+
+**Note:** WineASIO 32-bit itself works correctly. See `TEST-RESULTS.md` for detailed analysis.
+
 ---
 
 ## Technical Details (Wine 11 Architecture)
