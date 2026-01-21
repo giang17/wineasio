@@ -7,54 +7,94 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-## [1.4.1] - 2026-01-21
+## [1.4.2] - 2026-01-21
+
+### Fixed
+
+- **CRITICAL: Wine 11 WoW64 32-bit support now fully working**
+  - Discovered that in Wine 11 WoW64, 32-bit PE DLLs use 64-bit Unix libraries
+  - Unix `.so` for 32-bit PE must be built with `-m64` (not `-m32`)
+  - Unix `.so` for 32-bit PE must be installed to `x86_64-unix/` (not `i386-unix/`)
+  - Audio buffers now allocated on PE side to solve address space mismatch
+
+### Changed
+
+- **Makefile.wine11**: Corrected build flags for WoW64 architecture
+  - 32-bit PE DLL (`wineasio.dll`) built with `-m32`
+  - Unix library for 32-bit PE (`wineasio.so`) built with `-m64`
+  - Installation now correctly places `wineasio.so` in `x86_64-unix/`
+
+- **asio_pe.c**: Audio buffer allocation moved to PE side
+  - Buffers allocated using `HeapAlloc()` on Windows side
+  - Fixes address space incompatibility between 32-bit PE and 64-bit Unix
+
+- **asio_unix.c**: JACK callback updated to use PE-allocated buffers
+  - Now uses `pe_buffer[]` instead of `audio_buffer`
+  - Proper memory access across WoW64 boundary
+
+### Added
+
+- **Documentation**:
+  - `docs/WINE11_WOW64_ARCHITECTURE.md` - Detailed architecture explanation
+  - `docs/WINE11_WOW64_32BIT_SOLUTION.md` - Problem analysis and solution
+  - `.rules` - Project rules and quick reference for developers
+
+- **Test Programs**:
+  - `test_asio_interactive.c` - Interactive test keeping JACK connection open
+  - `test_asio_start.c` - Full ASIO pipeline test
+  - `test_asio_thiscall.c` - Thiscall convention verification
+  - `test_asio_extended.c` - Extended API testing
+  - `TEST_PROGRAMS_README.md` - Documentation for test programs
+
+### Tested
+
+Successfully tested with:
+- REAPER 32-bit ✅
+- REAPER 64-bit ✅
+- Garritan CFX Lite (32-bit) ✅
+- FL Studio 2025 ✅
+- Custom test programs ✅
+
+### Technical Details
+
+**Wine 11 WoW64 Architecture Discovery:**
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│ 32-bit PE DLL (wineasio.dll)                                │
+│   - Runs in emulated 32-bit address space                   │
+│   - Addresses: 0x00000000 - 0x7FFFFFFF                      │
+└─────────────────────┬───────────────────────────────────────┘
+                      │ __wine_unix_call() with WoW64 thunking
+                      ▼
+┌─────────────────────────────────────────────────────────────┐
+│ 64-bit Unix .so (wineasio.so in x86_64-unix/)               │
+│   - Runs in native 64-bit address space                     │
+│   - MUST be built with -m64, NOT -m32!                      │
+└─────────────────────────────────────────────────────────────┘
+```
+
+**Key insight:** In Wine 11 WoW64, there is NO `i386-unix/` directory for system libraries. All Unix libraries are 64-bit, even those serving 32-bit PE DLLs.
+
+---
+
+## [1.4.1] - 2026-01-20
 
 ### Added
 
 - **test_asio_minimal.c** - Diagnostic tool to verify WineASIO works independently
-  - Minimal ASIO host program for testing
-  - Proves 32-bit WineASIO works correctly
-  - Helps isolate application-specific issues from WineASIO bugs
 
 ### Changed
 
-- **Documentation cleanup** - Removed temporary debug files
-  - Consolidated debug documentation into DEVELOPMENT.md
-  - Cleaned up test scripts and temporary files
-  - All removed files remain in git history
+- Documentation cleanup - Removed temporary debug files
 
 ### Fixed
 
-- **Documentation accuracy** - Updated all dates to 2026
-- **Release notes** - Enhanced troubleshooting for Berkeley DB issues
-- **README** - Added Berkeley DB crash workaround section
-
-### Documentation
-
-- Created **CHANGELOG.md** - Complete version history
-- Enhanced **DEVELOPMENT.md** - Comprehensive developer guide with:
-  - Build instructions
-  - PE/Unix architecture explanation
-  - Testing procedures
-  - Code structure overview
-- Updated **RELEASE_NOTES.md** - Clarified 32-bit testing results
-- Updated **TEST-RESULTS.md** - Documented successful 32-bit verification
-
-### Testing
-
-- **32-bit verification complete** - Extensive testing confirms:
-  - vtable is valid (no NULL pointers)
-  - COM interface works correctly
-  - All ASIO functions execute without crashes
-  - Berkeley DB crashes are Wine compatibility issues, not WineASIO bugs
-
-### Notes
-
-This is a maintenance release after v1.4.0, adding documentation improvements, testing verification, and diagnostic tools. No code changes to the core WineASIO implementation.
+- Documentation accuracy - Updated all dates to 2026
 
 ---
 
-## [1.4.0] - 2026-01-21
+## [1.4.0] - 2026-01-20
 
 ### Added
 
@@ -66,191 +106,64 @@ This is a maintenance release after v1.4.0, adding documentation improvements, t
   - `asio_unix.c` - Unix-side JACK integration
   - `unixlib.h` - Interface definitions
 - Modern `__wine_unix_call` interface for PE↔Unix communication
-- Support for Wine's builtin DLL system with `winebuild --builtin`
-
-#### 32-bit Support Verification
-- Extensive testing of 32-bit WineASIO implementation
-- Created `test_asio_minimal.c` - diagnostic tool to verify WineASIO works independently
-- Confirmed 32-bit vtable, COM interface, and ASIO functions work correctly
-- Documented Berkeley DB compatibility issues (Wine bug, not WineASIO)
 
 #### JACK MIDI
 - JACK MIDI port creation: `WineASIO:midi_in` and `WineASIO:midi_out`
 - Automatic MIDI port registration when connecting to JACK
-- Bidirectional MIDI routing between DAW and JACK applications
 
 #### Settings GUI
 - Native Linux settings panel with PyQt5/PyQt6
 - Launch from DAW via "Show ASIO Panel" button
-- Windows launcher executables: `wineasio-settings.exe` and `wineasio-settings64.exe`
-- Real-time configuration without DAW restart
-
-#### Documentation
-- `WINE11_PORTING.md` - Technical details of Wine 11 port
-- `DEVELOPMENT.md` - Complete developer guide
-- `TEST-RESULTS.md` - 32-bit testing analysis and findings
-- Comprehensive README with Wine 11 installation instructions
-- Troubleshooting section for common issues
+- Windows launcher executables
 
 ### Changed
 
-- **Build system completely rewritten** for Wine 11+ compatibility
-- PE DLLs now built with MinGW-w64 cross-compiler
+- Build system completely rewritten for Wine 11+ compatibility
+- PE DLLs built with MinGW-w64 cross-compiler
 - Unix libraries built as separate ELF shared objects
-- Installation paths updated for Wine 11 directory structure:
-  - `x86_64-windows/` and `x86_64-unix/` for 64-bit
-  - `i386-windows/` and `i386-unix/` for 32-bit
-- Registry settings now use Wine's modern registry system
-- Improved error handling and logging
+- Installation paths updated for Wine 11 directory structure
 
 ### Fixed
 
-- 32-bit WoW64 registration (use `syswow64/regsvr32.exe`)
 - Buffer handling race conditions in audio callback
 - Memory leaks in JACK port management
-- NULL pointer checks in Unix callback functions
 - Proper cleanup on driver shutdown
-
-### Technical Details
-
-#### PE Side (asio_pe.c)
-- COM interface implementation (IUnknown + IASIO)
-- Windows registry configuration reading
-- Host application callback management
-- Buffer allocation and management
-- Calls to Unix side via `__wine_unix_call`
-
-#### Unix Side (asio_unix.c)
-- JACK client connection and management
-- Audio port creation and registration
-- JACK MIDI port handling
-- Real-time audio processing callback
-- Sample rate and buffer size negotiation
-
-#### Architecture
-```
-┌─────────────────────────────────────┐
-│   Windows Application (DAW)         │
-│   - FL Studio, Reaper, etc.         │
-└──────────────┬──────────────────────┘
-               │ ASIO API
-               ▼
-┌─────────────────────────────────────┐
-│   WineASIO PE DLL (Windows)         │
-│   - asio_pe.c                       │
-│   - COM/ASIO interface              │
-└──────────────┬──────────────────────┘
-               │ __wine_unix_call
-               ▼
-┌─────────────────────────────────────┐
-│   WineASIO Unix SO (Linux)          │
-│   - asio_unix.c                     │
-│   - JACK integration                │
-└──────────────┬──────────────────────┘
-               │ JACK API
-               ▼
-┌─────────────────────────────────────┐
-│   JACK Audio Server                 │
-└─────────────────────────────────────┘
-```
-
-### Known Issues
-
-- **Berkeley DB crashes** in some 32-bit applications (Wine compatibility issue)
-  - Error: `BDB0091 DB_VERSION_MISMATCH`
-  - Affects: REAPER 32-bit, some VST hosts using GTK+
-  - Workaround: Use 64-bit applications or clean database files
-  - Note: WineASIO itself works correctly; crash occurs before initialization
-
-### Breaking Changes
-
-- **Build system change**: Must use `Makefile.wine11` for Wine 10.2+
-- **Installation paths changed** to match Wine 11 structure
-- **File naming**: `wineasio64.dll` instead of `wineasio.dll` for 64-bit
-- **Legacy Makefile** still available for Wine 6.x-10.1
-
-### Migration Guide
-
-From WineASIO 1.3.0 to 1.4.0:
-
-1. Remove old installation:
-   ```bash
-   sudo rm /usr/lib/*/wine/*/wineasio*.dll*
-   sudo rm /usr/lib/*/wine/*/wineasio*.so
-   ```
-
-2. Build with new system:
-   ```bash
-   make -f Makefile.wine11 all
-   sudo make -f Makefile.wine11 install
-   ```
-
-3. Register drivers:
-   ```bash
-   make -f Makefile.wine11 register
-   ```
-
-4. Clean stale database files (if experiencing crashes):
-   ```bash
-   find ~/.wine -name "*.db" -delete
-   ```
-
-### Dependencies
-
-#### Build Time
-- GCC 7.0+
-- MinGW-w64 (i686 and x86_64 targets)
-- Wine 10.2+ development headers
-- JACK development files
-- Python 3.6+ with PyQt5 or PyQt6
-
-#### Runtime
-- Wine 10.2+ or Wine 11
-- JACK Audio Connection Kit
-- Python 3.6+ with PyQt5 or PyQt6 (for settings GUI)
-
-### Compatibility
-
-| Wine Version | Status |
-|--------------|--------|
-| Wine 11.x | ✅ Fully supported |
-| Wine 10.2-10.27 | ✅ Fully supported |
-| Wine 10.0-10.1 | ✅ Use legacy Makefile |
-| Wine 6.x-9.x | ✅ Use legacy Makefile |
-| Wine 5.x and earlier | ⚠️ Untested |
-
-### Testing
-
-Tested configurations:
-- **OS**: Ubuntu 24.04, Fedora 39, Arch Linux
-- **Wine**: Wine 11.0, Wine 10.27
-- **JACK**: JACK2 1.9.22
-- **DAWs**: FL Studio 2025, Reaper 7.x, Ableton Live 11
-- **Architectures**: x86_64 (64-bit), i386 (32-bit WoW64)
-
-### Credits
-
-- Wine development team for excellent PE/Unix split documentation
-- WineASIO maintainers and contributors
-- JACK and Linux audio community
-- All users who reported bugs and tested pre-releases
-
-### License
-
-- WineASIO library: LGPL v2.1 or later
-- Settings GUI: GPL v2 or later
 
 ---
 
 ## [1.3.0] - 2023
 
-Previous releases. See git history for details.
-
-For older changelogs, see the original WineASIO repository:
-https://github.com/wineasio/wineasio
+- Make GUI settings panel compatible with PyQt6 or PyQt5
+- Load libjack.so.0 dynamically at runtime
+- Remove useless -mnocygwin flag
+- Remove dependency on asio headers
 
 ---
 
+## [1.2.0] - 2023
+
+- Fix compatibility with Wine > 8
+- Add wineasio-register script
+
+---
+
+## [1.1.0] - 2022
+
+- Various bug fixes
+- Fix compatibility with Wine > 6.5
+
+---
+
+## [1.0.0] - 2020
+
+- Add packaging script
+- Fix control panel startup
+- Fix code to work with latest Wine
+- Add custom GUI for WineASIO settings
+
+---
+
+[1.4.2]: https://github.com/giang17/wineasio/releases/tag/v1.4.2
 [1.4.1]: https://github.com/giang17/wineasio/releases/tag/v1.4.1
 [1.4.0]: https://github.com/giang17/wineasio/releases/tag/v1.4.0
 [1.3.0]: https://github.com/wineasio/wineasio/releases/tag/v1.3.0

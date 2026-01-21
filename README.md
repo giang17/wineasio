@@ -13,11 +13,23 @@ You can, for example, use with FL Studio, EZkeys, UVI Workstation, and other Pro
 
 ---
 
-## 🎉 Wine 11 Support (NEW!)
+## 🎉 Wine 11 Support (v1.4.2)
 
-**WineASIO now supports Wine 11!**
+**WineASIO now fully supports Wine 11, including 32-bit applications!**
 
 Wine 11 (released January 13, 2026) introduced a new DLL architecture that separates PE (Windows) code from Unix code. This required a complete rewrite of WineASIO's build system and internal architecture.
+
+### ⚠️ Important: Wine 11 WoW64 Architecture
+
+In Wine 11 WoW64, **32-bit PE DLLs use 64-bit Unix libraries**. This is different from traditional Wine where 32-bit used 32-bit Unix libraries.
+
+```
+32-bit PE (wineasio.dll) → WoW64 Thunking → 64-bit Unix (wineasio.so)
+```
+
+This means:
+- `wineasio.dll` (32-bit PE) is installed to `i386-windows/`
+- `wineasio.so` (64-bit Unix!) is installed to `x86_64-unix/` (NOT `i386-unix/`)
 
 ### Wine Version Compatibility
 
@@ -93,10 +105,12 @@ Default paths for Wine 11:
 sudo cp build_wine11/wineasio64.dll /opt/wine-stable/lib/wine/x86_64-windows/
 sudo cp build_wine11/wineasio64.so /opt/wine-stable/lib/wine/x86_64-unix/
 
-# 32-bit
+# 32-bit (note: Unix .so goes to x86_64-unix, NOT i386-unix!)
 sudo cp build_wine11/wineasio.dll /opt/wine-stable/lib/wine/i386-windows/
-sudo cp build_wine11/wineasio.so /opt/wine-stable/lib/wine/i386-unix/
+sudo cp build_wine11/wineasio.so /opt/wine-stable/lib/wine/x86_64-unix/
 ```
+
+**Note:** In Wine 11 WoW64, there is NO `i386-unix/` directory. All Unix libraries are 64-bit.
 
 ### Registration (Wine 11+)
 
@@ -307,8 +321,15 @@ sudo winebuild --builtin /opt/wine-stable/lib/wine/x86_64-windows/wineasio64.dll
 
 32-bit Windows apps use WoW64. Ensure:
 - `wineasio.dll` is in `i386-windows/`
-- `wineasio.so` is in `i386-unix/`
-- Register with 32-bit regsvr32: `wine ~/.wine/drive_c/windows/syswow64/regsvr32.exe wineasio.dll`
+- `wineasio.so` is in `x86_64-unix/` (NOT `i386-unix/` - Wine 11 WoW64 uses 64-bit Unix libs!)
+- Register with 32-bit regsvr32: `wine regsvr32 wineasio.dll`
+
+### No audio from 32-bit apps (Wine 11)
+
+If 32-bit apps load WineASIO but produce no audio:
+1. Verify `wineasio.so` is 64-bit: `file /path/to/wine/x86_64-unix/wineasio.so` should say "ELF 64-bit"
+2. Check for `[WineASIO-Unix]` debug messages - if missing, Unix library not loading
+3. Rebuild with `make -f Makefile.wine11 32` and reinstall
 
 ### Berkeley DB crashes (some 32-bit apps)
 
@@ -344,12 +365,14 @@ Cannot open DB environment: BDB0091 DB_VERSION_MISMATCH
 
 Wine 11 requires a split architecture:
 
-| Component | Description | Built With |
-|-----------|-------------|------------|
-| `wineasio64.dll` | 64-bit PE DLL (Windows code) | mingw-w64 |
-| `wineasio64.so` | 64-bit Unix library (JACK interface) | gcc |
-| `wineasio.dll` | 32-bit PE DLL (Windows code) | mingw-w64 |
-| `wineasio.so` | 32-bit Unix library (JACK interface) | gcc |
+| Component | Description | Built With | Install Location |
+|-----------|-------------|------------|------------------|
+| `wineasio64.dll` | 64-bit PE DLL (Windows code) | mingw-w64 `-m64` | `x86_64-windows/` |
+| `wineasio64.so` | 64-bit Unix library (JACK interface) | gcc `-m64` | `x86_64-unix/` |
+| `wineasio.dll` | 32-bit PE DLL (Windows code) | mingw-w64 `-m32` | `i386-windows/` |
+| `wineasio.so` | **64-bit** Unix library for 32-bit PE | gcc **`-m64`** | **`x86_64-unix/`** |
+
+**Critical:** In Wine 11 WoW64, the Unix library for 32-bit PE is 64-bit, not 32-bit!
 
 The PE DLL handles:
 - COM/ASIO interface
@@ -368,7 +391,7 @@ Communication between PE and Unix uses Wine's `__wine_unix_call` interface.
 ## File Structure
 
 ```
-wineasio-1.3.0/
+wineasio/
 ├── asio_pe.c           # PE-side code (Wine 11)
 ├── asio_unix.c         # Unix-side code (Wine 11)
 ├── unixlib.h           # Shared interface definitions
@@ -376,12 +399,13 @@ wineasio-1.3.0/
 ├── Makefile            # Legacy build system
 ├── asio.c              # Legacy combined code
 ├── wineasio.def        # Export definitions
-├── ntdll_wine.def      # 64-bit ntdll imports
-├── ntdll_wine32.def    # 32-bit ntdll imports
 ├── gui/                # PyQt control panel
 │   ├── settings.py     # Main settings GUI
-│   ├── ui_settings.py  # UI definitions
-│   └── launcher/       # Windows launcher sources
+│   └── ui_settings.py  # UI definitions
+├── docs/               # Documentation
+│   ├── WINE11_WOW64_ARCHITECTURE.md
+│   └── WINE11_WOW64_32BIT_SOLUTION.md
+├── test_asio_*.c       # Test programs
 └── docker/             # Docker build environment
 ```
 
@@ -389,19 +413,24 @@ wineasio-1.3.0/
 
 ## Change Log
 
+### 1.4.2 (Wine 11 WoW64 Fix) - January 21, 2026
+* **CRITICAL FIX:** 32-bit PE now correctly uses 64-bit Unix library
+* **FIX:** Audio buffers allocated on PE side for WoW64 address space compatibility
+* **FIX:** JACK callback uses PE-allocated buffers
+* **NEW:** Comprehensive WoW64 architecture documentation
+* **NEW:** Test programs for debugging (test_asio_interactive.c, etc.)
+* Tested with REAPER 32-bit, Garritan CFX Lite, FL Studio
+
 ### 1.4.0 (Wine 11 Port) - January 2026
 * **NEW:** Full Wine 11 support with new PE/Unix split architecture
 * **NEW:** `Makefile.wine11` for building with Wine 10.2+/11
 * **NEW:** Separate PE DLL and Unix SO builds
 * **NEW:** Support for `__wine_unix_call` interface
-* **NEW:** 32-bit and 64-bit builds with proper WoW64 support
 * **NEW:** Settings GUI integration - launch from DAW's ASIO control panel
 * **NEW:** JACK MIDI ports (`WineASIO:midi_in`, `WineASIO:midi_out`)
-* **NEW:** Windows launcher executables for GUI (`wineasio-settings*.exe`)
 * Added `asio_pe.c` - Windows-side ASIO implementation
 * Added `asio_unix.c` - Unix-side JACK implementation (with MIDI support)
 * Added `unixlib.h` - Shared interface definitions
-* Added export definition files for Wine compatibility
 
 ### 1.3.0
 * 24-JUL-2025: Make GUI settings panel compatible with PyQt6 or PyQt5
