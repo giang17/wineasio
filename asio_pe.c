@@ -25,6 +25,9 @@
 
 #define COBJMACROS
 #include <windows.h>
+
+/* Earliest possible debug output - uses OutputDebugStringA which works before CRT init */
+#define EARLY_DBG(msg) OutputDebugStringA("[WineASIO-EARLY] " msg "\n")
 #include <objbase.h>
 #include <olectl.h>
 #include <mmsystem.h>
@@ -33,6 +36,10 @@
 /* NtQueryVirtualMemory will be loaded dynamically to avoid stdcall decoration issues on 32-bit */
 typedef NTSTATUS (WINAPI *NtQueryVirtualMemory_t)(HANDLE, LPCVOID, ULONG, PVOID, SIZE_T, SIZE_T*);
 static NtQueryVirtualMemory_t pNtQueryVirtualMemory = NULL;
+
+/* Wine unix call dispatcher - loaded dynamically to avoid import resolution issues on 32-bit WoW64 */
+typedef NTSTATUS (WINAPI *wine_unix_call_dispatcher_t)(UINT64, unsigned int, void *);
+static wine_unix_call_dispatcher_t p__wine_unix_call_dispatcher = NULL;
 
 #include "unixlib.h"
 
@@ -43,6 +50,9 @@ static NtQueryVirtualMemory_t pNtQueryVirtualMemory = NULL;
 #ifndef STATUS_UNSUCCESSFUL
 #define STATUS_UNSUCCESSFUL ((NTSTATUS)0xC0000001L)
 #endif
+
+/* Direct stderr debug output - always visible regardless of WINEDEBUG settings */
+#define DBG_STDERR(fmt, ...) do { fprintf(stderr, "[WineASIO-DBG] " fmt "\n", ##__VA_ARGS__); fflush(stderr); } while(0)
 
 /* Debug macros - replace Wine's debug system with simple printf for PE side */
 #ifdef WINEASIO_DEBUG
@@ -61,22 +71,17 @@ static NtQueryVirtualMemory_t pNtQueryVirtualMemory = NULL;
  */
 typedef UINT64 unixlib_handle_t;
 
-/* Import Wine's unix call interface directly from ntdll 
- * These are set up by Wine's loader for builtin DLLs */
-extern unixlib_handle_t __wine_unixlib_handle;
-extern NTSTATUS (WINAPI *__wine_unix_call_dispatcher)(unixlib_handle_t, unsigned int, void *);
-
 /* Our handle - set during initialization */
 static unixlib_handle_t wineasio_unix_handle = 0;
 
-/* Wrapper for unix calls */
+/* Wrapper for unix calls - uses dynamically loaded dispatcher */
 static inline NTSTATUS wine_unix_call(unixlib_handle_t handle, unsigned int code, void *args)
 {
-    if (!__wine_unix_call_dispatcher) {
+    if (!p__wine_unix_call_dispatcher) {
         ERR("Unix call dispatcher not available!\n");
         return STATUS_UNSUCCESSFUL;
     }
-    return __wine_unix_call_dispatcher(handle, code, args);
+    return p__wine_unix_call_dispatcher(handle, code, args);
 }
 
 /* GUID to string helper - replacement for wine_dbgstr_guid */
@@ -97,25 +102,46 @@ static BOOL init_wine_unix_call(HINSTANCE hInstDLL)
 {
     NTSTATUS status;
     HMODULE hNtdll;
+    wine_unix_call_dispatcher_t *dispatcher_ptr;
     
-    /* Check if unix call dispatcher is available */
-    if (!__wine_unix_call_dispatcher) {
-        ERR("Wine unix call dispatcher not available - not running under Wine?\n");
-        return FALSE;
-    }
+    DBG_STDERR("init_wine_unix_call: starting initialization");
     
-    /* Load NtQueryVirtualMemory dynamically to avoid stdcall decoration issues on 32-bit */
+    /* Load ntdll functions dynamically to avoid import resolution issues on 32-bit WoW64 */
     hNtdll = GetModuleHandleA("ntdll.dll");
     if (!hNtdll) {
         ERR("Failed to get ntdll.dll handle\n");
+        DBG_STDERR("init_wine_unix_call: FAILED - no ntdll.dll handle");
         return FALSE;
     }
+    DBG_STDERR("init_wine_unix_call: got ntdll handle %p", hNtdll);
     
+    /* Load __wine_unix_call_dispatcher - it's exported as DATA (a pointer to the dispatcher)
+     * GetProcAddress returns the address of the exported variable, which contains the function pointer */
+    dispatcher_ptr = (wine_unix_call_dispatcher_t *)GetProcAddress(hNtdll, "__wine_unix_call_dispatcher");
+    if (!dispatcher_ptr) {
+        ERR("Failed to get __wine_unix_call_dispatcher from ntdll - not running under Wine?\n");
+        DBG_STDERR("init_wine_unix_call: FAILED - __wine_unix_call_dispatcher not found");
+        return FALSE;
+    }
+    DBG_STDERR("init_wine_unix_call: dispatcher_ptr = %p", dispatcher_ptr);
+    
+    /* Dereference to get the actual function pointer */
+    p__wine_unix_call_dispatcher = *dispatcher_ptr;
+    if (!p__wine_unix_call_dispatcher) {
+        ERR("Wine unix call dispatcher is NULL - unix side not loaded?\n");
+        DBG_STDERR("init_wine_unix_call: FAILED - dispatcher is NULL");
+        return FALSE;
+    }
+    DBG_STDERR("init_wine_unix_call: p__wine_unix_call_dispatcher = %p", p__wine_unix_call_dispatcher);
+    
+    /* Load NtQueryVirtualMemory dynamically to avoid stdcall decoration issues on 32-bit */
     pNtQueryVirtualMemory = (NtQueryVirtualMemory_t)GetProcAddress(hNtdll, "NtQueryVirtualMemory");
     if (!pNtQueryVirtualMemory) {
         ERR("Failed to get NtQueryVirtualMemory from ntdll\n");
+        DBG_STDERR("init_wine_unix_call: FAILED - NtQueryVirtualMemory not found");
         return FALSE;
     }
+    DBG_STDERR("init_wine_unix_call: pNtQueryVirtualMemory = %p", pNtQueryVirtualMemory);
     
     /* Get our unix library handle using NtQueryVirtualMemory with MemoryWineUnixFuncs = 1000 
      * Wine's loader should have already loaded the unix .so for this builtin DLL */
@@ -125,6 +151,7 @@ static BOOL init_wine_unix_call(HINSTANCE hInstDLL)
                                    sizeof(wineasio_unix_handle), NULL);
     if (status) {
         ERR("Failed to get unix library handle, status 0x%lx\n", (unsigned long)status);
+        DBG_STDERR("init_wine_unix_call: FAILED - NtQueryVirtualMemory returned 0x%lx", (unsigned long)status);
 #ifdef _WIN64
         ERR("Make sure wineasio64.so is in the Wine unix library path\n");
 #else
@@ -133,6 +160,7 @@ static BOOL init_wine_unix_call(HINSTANCE hInstDLL)
         return FALSE;
     }
     
+    DBG_STDERR("init_wine_unix_call: SUCCESS - unix handle = 0x%llx", (unsigned long long)wineasio_unix_handle);
     TRACE("Wine unix call interface initialized, handle=%llx\n", 
           (unsigned long long)wineasio_unix_handle);
     return TRUE;
@@ -426,6 +454,7 @@ static LONG STDMETHODCALLTYPE Init(LPWINEASIO iface, void *sysRef)
     IWineASIO *This = (IWineASIO *)iface;
     struct asio_init_params params;
     
+    DBG_STDERR(">>> Init(iface=%p, sysRef=%p)", iface, sysRef);
     WARN(">>> CALLED: Init(iface=%p, sysRef=%p)\n", iface, sysRef);
     TRACE("iface=%p sysRef=%p\n", iface, sysRef);
     
@@ -484,6 +513,7 @@ static LONG STDMETHODCALLTYPE Start(LPWINEASIO iface)
     IWineASIO *This = (IWineASIO *)iface;
     struct asio_start_params params = { .handle = This->handle };
     
+    DBG_STDERR(">>> Start(iface=%p)", iface);
     WARN(">>> CALLED: Start(iface=%p)\n", iface);
     TRACE("iface=%p\n", iface);
     
@@ -500,14 +530,18 @@ static LONG STDMETHODCALLTYPE Start(LPWINEASIO iface)
     
     /* Prime the first buffer */
     if (This->callbacks) {
+        DBG_STDERR("    Priming first buffer, time_info_mode=%d", This->time_info_mode);
         if (This->time_info_mode) {
+            DBG_STDERR("    Calling bufferSwitchTimeInfo(%p, 0, TRUE)", This->callbacks->bufferSwitchTimeInfo);
             memset(&This->host_time, 0, sizeof(This->host_time));
             This->host_time.sampleRate = This->sample_rate;
             This->host_time.flags = 0x7;
             This->callbacks->bufferSwitchTimeInfo(&This->host_time, 0, TRUE);
         } else {
+            DBG_STDERR("    Calling bufferSwitch(%p, 0, TRUE)", This->callbacks->bufferSwitch);
             This->callbacks->bufferSwitch(0, TRUE);
         }
+        DBG_STDERR("    Callback returned OK");
     }
     
     return ASE_OK;
@@ -715,6 +749,13 @@ static LONG STDMETHODCALLTYPE CreateBuffers(LPWINEASIO iface, ASIOBufferInfo *bu
     struct asio_buffer_info *unix_infos;
     int i;
     
+    DBG_STDERR(">>> CreateBuffers(iface=%p, bufferInfos=%p, numChannels=%d, bufferSize=%d, callbacks=%p)", iface, bufferInfos, numChannels, bufferSize, callbacks);
+    if (callbacks) {
+        DBG_STDERR("    callbacks->bufferSwitch=%p", callbacks->bufferSwitch);
+        DBG_STDERR("    callbacks->sampleRateDidChange=%p", callbacks->sampleRateDidChange);
+        DBG_STDERR("    callbacks->asioMessage=%p", callbacks->asioMessage);
+        DBG_STDERR("    callbacks->bufferSwitchTimeInfo=%p", callbacks->bufferSwitchTimeInfo);
+    }
     WARN(">>> CALLED: CreateBuffers(iface=%p, bufferInfos=%p, numChannels=%d, bufferSize=%d, callbacks=%p)\n", iface, bufferInfos, numChannels, bufferSize, callbacks);
     TRACE("iface=%p numChannels=%d bufferSize=%d\n", iface, numChannels, bufferSize);
     
@@ -958,8 +999,9 @@ static IClassFactoryImpl WINEASIO_CF = { &CF_Vtbl, 1 };
 /*
  * DLL exports
  */
-HRESULT WINAPI DllGetClassObject(REFCLSID rclsid, REFIID riid, LPVOID *ppv)
+HRESULT WINAPI DllGetClassObject(REFCLSID rclsid, REFIID riid, void **ppv)
 {
+    DBG_STDERR(">>> DllGetClassObject called");
     TRACE("rclsid=%s riid=%s ppv=%p\n", wine_dbgstr_guid(rclsid), wine_dbgstr_guid(riid), ppv);
     
     if (ppv == NULL)
@@ -1062,18 +1104,29 @@ HRESULT WINAPI DllUnregisterServer(void)
 
 BOOL WINAPI DllMain(HINSTANCE hInstDLL, DWORD fdwReason, LPVOID lpvReserved)
 {
+    /* Very first thing - output debug before anything else */
+    EARLY_DBG("DllMain entered");
+    
     TRACE("hInstDLL=%p fdwReason=%lx lpvReserved=%p\n", hInstDLL, fdwReason, lpvReserved);
+    DBG_STDERR("DllMain: hInstDLL=%p fdwReason=%lx", hInstDLL, fdwReason);
     
     switch (fdwReason) {
     case DLL_PROCESS_ATTACH:
+        EARLY_DBG("DllMain: DLL_PROCESS_ATTACH");
+        DBG_STDERR("DllMain: DLL_PROCESS_ATTACH - calling DisableThreadLibraryCalls");
         DisableThreadLibraryCalls(hInstDLL);
+        DBG_STDERR("DllMain: calling init_wine_unix_call");
         if (!init_wine_unix_call(hInstDLL)) {
             ERR("Failed to load Unix library\n");
+            DBG_STDERR("DllMain: init_wine_unix_call FAILED");
             return FALSE;
         }
+        DBG_STDERR("DllMain: init_wine_unix_call succeeded");
         break;
     case DLL_PROCESS_DETACH:
+        EARLY_DBG("DllMain: DLL_PROCESS_DETACH");
         break;
     }
+    EARLY_DBG("DllMain returning TRUE");
     return TRUE;
 }

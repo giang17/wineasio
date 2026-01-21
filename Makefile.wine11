@@ -111,7 +111,7 @@ $(NTDLL_LIB64): $(NTDLL_DEF64) | $(BUILD_DIR)
 	@echo "Creating 64-bit ntdll import library..."
 	$(DLLTOOL64) -d $(NTDLL_DEF64) -l $@
 
-# Create ntdll import library for 32-bit (uses different def file for stdcall)
+# Create ntdll import library for 32-bit
 $(NTDLL_LIB32): $(NTDLL_DEF32) | $(BUILD_DIR)
 	@echo "Creating 32-bit ntdll import library..."
 	$(DLLTOOL32) -d $(NTDLL_DEF32) -l $@
@@ -127,11 +127,9 @@ $(BUILD_DIR)/$(DLL64): $(PE_SOURCES) unixlib.h $(NTDLL_LIB64) | $(BUILD_DIR)
 	@echo "Marking as Wine builtin..."
 	-$(WINEBUILD) --builtin $@ 2>/dev/null || true
 
-# 32-bit PE DLL
-# Note: We use wineasio.def to export functions without stdcall decoration
-# because Wine's LdrGetProcedureAddress looks for undecorated names
+# 32-bit PE DLL - uses custom entry point to avoid TLS callback crashes in WoW64
 $(BUILD_DIR)/$(DLL32): $(PE_SOURCES) unixlib.h $(NTDLL_LIB32) wineasio.def | $(BUILD_DIR)
-	@echo "Building 32-bit PE DLL..."
+	@echo "Building 32-bit PE DLL (with TLS workaround)..."
 	$(MINGW32) $(PE_CFLAGS) -m32 \
 		-o $@ $(PE_SOURCES) \
 		$(NTDLL_LIB32) \
