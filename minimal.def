@@ -1,6 +1,0 @@
-LIBRARY minimal_inline_guid
-EXPORTS
-    DllCanUnloadNow         @1
-    DllGetClassObject       @2
-    DllRegisterServer       @3
-    DllUnregisterServer     @4

@@ -1,7 +1,0 @@
-; Wine-specific symbols from ntdll.dll for WineASIO (64-bit)
-; __wine_unix_call_dispatcher is now loaded dynamically via GetProcAddress
-; to avoid import resolution issues where the DATA export was being
-; incorrectly resolved as a function call to NULL
-LIBRARY ntdll.dll
-EXPORTS
-    ; No static imports needed - all Wine-specific functions loaded dynamically
