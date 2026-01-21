@@ -1,6 +1,8 @@
 # Plan: Wine 11 WoW64 Unix-Loader Fix
 
-## Status: ⚠️ PARTIALLY SOLVED - Audio not working yet
+## Status: ⚠️ PARTIALLY SOLVED - Init() fails for real ASIO hosts
+
+**Last Updated**: 2026-01-21 Late Evening
 
 ## Original Problem
 `NtQueryVirtualMemory(MemoryWineUnixFuncs)` returned `STATUS_DLL_NOT_FOUND` (c0000135) for 32-bit PE DLLs.
@@ -103,65 +105,100 @@ The crash was in the **test program**, not Wine or WineASIO:
 - 2026-01-21: Re-enabled `--builtin`, created proper test
 - 2026-01-21: REAPER 32-bit loads WineASIO, CreateBuffers works, but no audio!
 
-## Current Status (2026-01-21 19:01)
+## Current Status (2026-01-21 Late Evening)
 
 ### What Works
 - ✅ Unix-side loads correctly (`SUCCESS - unix handle = ...`)
 - ✅ DllGetClassObject called
-- ✅ Init called and succeeds
-- ✅ CreateBuffers called (18 channels, buffer size 128)
-- ✅ REAPER recognizes WineASIO as ASIO driver
+- ✅ **test_asio_start.exe** - Full ASIO pipeline works perfectly!
+  - Init() succeeds
+  - CreateBuffers() succeeds  
+  - Start() succeeds
+  - JACK ports created (52 ports visible in patchance)
+  - Callbacks fire hundreds of times
+  - Audio pipeline fully functional
 
-### What Doesn't Work
+### What Doesn't Work - Real ASIO Hosts (REAPER, CFX Lite)
+- ❌ **Init() FAILS** - No success message, JACK ports never created
+- ❌ CreateBuffers() never reached (Init fails first)
+- ❌ Start() never reached
 - ❌ No audio output - REAPER reports "audio close"
-- ❌ Start() not visible in logs - may not be called or fails silently
-- ❌ After closing REAPER with these settings, next start crashes
 
-### Debug Log Evidence
+### Debug Log Evidence (Latest - 2026-01-21 19:42)
 ```
-[WineASIO-DBG] init_wine_unix_call: SUCCESS - unix handle = 0x708a7f8e3cc0
-[WineASIO-DBG] >>> DllGetClassObject called
-[WineASIO-DBG] >>> Init(iface=01744c80, sysRef=000100f0)
-[WineASIO-DBG] >>> CreateBuffers(iface=01744c80, bufferInfos=00f85760, numChannels=18, bufferSize=128, callbacks=00f977cc)
-[WineASIO-DBG]     callbacks->bufferSwitch=0044c9c4
-...
-[WineASIO-DBG] DllMain: hInstDLL=02420000 fdwReason=0  # PROCESS_DETACH - app exits
+[WineASIO-DBG] >>> Init(iface=01741620, sysRef=0005022c)
+[WineASIO-DBG] DllMain: hInstDLL=09860000 fdwReason=2   # DLL_THREAD_ATTACH
+[WineASIO-DBG] DllMain: hInstDLL=09860000 fdwReason=3   # DLL_THREAD_DETACH
+[WineASIO-DBG] DllMain: hInstDLL=09860000 fdwReason=3   # DLL_THREAD_DETACH
+[WineASIO-DBG] DllMain: hInstDLL=09860000 fdwReason=0   # DLL_PROCESS_DETACH - EXIT!
 ```
 
-No `Start()` call visible after CreateBuffers!
+**CRITICAL**: No `<<< Init returning SUCCESS` message! 
+Init() is failing silently - the Unix side (JACK connection) fails.
 
 ## Next Session TODOs
 
-### Priority 1: Debug why Start() is not called / audio doesn't work
-1. Add more debug output to `Start()`, `Stop()`, `GetSampleRate()`, `CanSampleRate()`
-2. Check if CreateBuffers returns correct status
-3. Check if callbacks are being called
-4. Verify JACK connection is established
+### Priority 1: Debug why Init() fails for real ASIO hosts
+1. **Add debug output to `asio_unix.c` → `asio_init()`**:
+   - Before/after `pjack_client_open()` 
+   - Check if JACK client is NULL
+   - Before/after `pjack_activate()`
+   - Log JACK status codes
+2. Compare Init() call parameters:
+   - Test program uses `sysRef=NULL`
+   - REAPER uses `sysRef=0005022c` (window handle)
+3. Check if 32-bit libjack is loading correctly
 
-### Priority 2: Fix crash on second REAPER start
-1. Reset audio settings in REAPER before closing
-2. Or find what state causes the crash
-3. Test in clean wine-test prefix
+### Priority 2: Investigate JACK 32-bit Issues
+1. Check if 32-bit libjack is installed: `ls /usr/lib/i386-linux-gnu/libjack*`
+2. Check if PipeWire-JACK works with 32-bit
+3. Try running a simple 32-bit JACK client
 
-### Priority 3: Verify with other 32-bit hosts
-1. Test with Garritan CFX Lite
-2. Test with other 32-bit DAWs
+### Priority 3: Test with CFX Lite (already done - same issue)
+- ✅ Tested: Same behavior as REAPER - Init() fails
 
 ### Debug Commands for Next Session
 ```bash
-# Start REAPER with full debug logging
-WINEDEBUG=+wineasio,-all wine ~/.wine/drive_c/Program\ Files\ \(x86\)/REAPER/reaper.exe 2>&1 | tee ~/docker-workspace/logs/reaper32_debug.log
+# Add debug to asio_unix.c, rebuild, and test
+cd /home/gng/docker-workspace/wineasio-fork
+# Edit asio_unix.c → asio_init() function
+make -f Makefile.wine11 32
+sudo make -f Makefile.wine11 install
 
-# Check JACK connections
-jack_lsp -c
+# Test with debug output
+WINEDEBUG=-all wine "$HOME/.wine/drive_c/Program Files (x86)/REAPER/reaper.exe" 2>&1 | head -40
 
-# Reset REAPER audio settings (delete config)
-rm ~/.wine/drive_c/users/*/Application\ Data/REAPER/reaper.ini
+# Check JACK 32-bit library
+ls -la /usr/lib/i386-linux-gnu/libjack*
+ldconfig -p | grep jack
+
+# Test working program for comparison
+WINEDEBUG=-all wine test_asio_start.exe 2>&1 | grep -E "Init|JACK"
 ```
+
+### Key Insight
+The problem is NOT in CreateBuffers() or Start()!
+The problem is in **Init() → Unix side → JACK connection fails for real hosts**.
+
+Test program Init() succeeds, but REAPER/CFX Lite Init() fails.
+The difference might be:
+- sysRef parameter (NULL vs window handle)
+- Thread context
+- 32-bit JACK library issues
+- PipeWire-JACK 32-bit compatibility
 
 ### Log Files
 - `~/docker-workspace/logs/reaper32_wineasio_20260121_190132.log`
+- `~/docker-workspace/logs/reaper32_callback_debug_20260121_193922.log`
+- `~/docker-workspace/logs/reaper32_return_debug_20260121_194245.log`
 
 ---
 
-**CONCLUSION**: Unix-side loading is fixed with `--builtin`. But audio pipeline has issues - CreateBuffers succeeds but Start() is not called or fails. Need to debug the ASIO workflow after CreateBuffers.
+**CONCLUSION**: 
+
+1. ✅ Unix-side loading is fixed with `--builtin`
+2. ✅ Test program (`test_asio_start.exe`) proves WineASIO code is correct
+3. ❌ Real ASIO hosts (REAPER, CFX Lite) fail at Init() - JACK connection not established
+4. ❓ The difference between test and real hosts needs investigation
+
+**Next Step**: Add debug output to `asio_unix.c` → `asio_init()` to find exactly why JACK client creation fails for real ASIO hosts but works for the test program.

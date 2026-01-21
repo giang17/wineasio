@@ -3,8 +3,8 @@
 ## Session Overview
 This document records the debugging session for Wine 11 WoW64 32-bit DLL loading issues with WineASIO.
 
-**Date**: 2026-01-21 (Updated: 2026-01-21 19:01)  
-**Status**: ⚠️ PARTIALLY FIXED - DLL loads, but audio not working yet  
+**Date**: 2026-01-21 (Updated: 2026-01-21 Late Evening)  
+**Status**: ⚠️ PARTIALLY FIXED - Init() fails for real ASIO hosts  
 **Branch**: wine11-32bit-crash-debug  
 
 ## Problem Statement
@@ -193,15 +193,16 @@ LONG call_thiscall_0(void *func, IWineASIO *pThis) {
 
 ### Remaining Issues
 
-1. **No audio output** - CreateBuffers succeeds but Start() not called or fails
-2. **Crash on second start** - REAPER crashes when started with WineASIO settings saved
-3. **JACK connection** - Need to verify JACK client is created and connected
+1. **Init() fails for real ASIO hosts** - JACK client not created for REAPER/CFX Lite
+2. **Test program works perfectly** - Same code, different behavior
+3. **No audio output** - Because Init() fails, CreateBuffers/Start never reached
 
 ### Fixed Issues
 - ✅ PE loader issues fixed with linker flags
 - ✅ Unix side loading fixed by re-enabling `--builtin`
 - ✅ Test program crashes fixed by using correct thiscall convention
-- ✅ DLL loads and initializes in REAPER
+- ✅ DLL loads in REAPER (but Init() fails on Unix side)
+- ✅ `test_asio_start.exe` proves full audio pipeline works
 
 ## Recommendations
 
@@ -244,20 +245,23 @@ XXXXXXX Re-enable --builtin flag and add thiscall test
 2. ~~Fix test program calling convention~~ → test_asio_thiscall.c created
 3. ~~Re-enable --builtin in Makefile~~ → Done
 4. ~~Verify test_asio_thiscall.exe~~ → Passes all tests
-5. ~~Test REAPER 32-bit loading~~ → Loads, CreateBuffers works
+5. ~~Test REAPER 32-bit loading~~ → Loads but Init() fails
+6. ~~Create test_asio_start.exe~~ → Full pipeline test, WORKS PERFECTLY!
+7. ~~Test with Garritan CFX Lite~~ → Same issue as REAPER - Init() fails
 
 ### Remaining Tasks (Next Session)
-1. **Debug why Start() is not called after CreateBuffers**
-   - Add debug output to Start(), Stop(), GetSampleRate(), CanSampleRate()
-   - Check CreateBuffers return value
-   - Verify callbacks are being triggered
-2. **Debug JACK connection**
-   - Check if JACK client is created
-   - Verify port connections with `jack_lsp -c`
-3. **Fix crash on second REAPER start**
-   - Test in clean wine-test prefix
-   - Identify what saved state causes crash
-4. Test with other 32-bit hosts (Garritan CFX Lite)
+1. **Debug why Init() fails for real ASIO hosts**
+   - Add debug output to `asio_unix.c` → `asio_init()`
+   - Check if `pjack_client_open()` succeeds
+   - Check if `pjack_activate()` succeeds
+   - Compare sysRef parameter (NULL vs window handle)
+2. **Investigate JACK 32-bit issues**
+   - Check if 32-bit libjack is loading
+   - Check PipeWire-JACK 32-bit compatibility
+3. **Compare test program vs real hosts**
+   - Why does test_asio_start.exe work but REAPER doesn't?
+   - Thread context differences?
+   - Timing differences?
 
 ## Session Notes
 
@@ -302,6 +306,8 @@ This shows that **understanding calling conventions** is critical when debugging
 
 ### Log Files
 - `~/docker-workspace/logs/reaper32_wineasio_20260121_190132.log` - REAPER session with CreateBuffers but no audio
+- `~/docker-workspace/logs/reaper32_callback_debug_20260121_193922.log` - Crash during CreateBuffers
+- `~/docker-workspace/logs/reaper32_return_debug_20260121_194245.log` - Init() fails silently
 
 ---
 
@@ -311,11 +317,20 @@ This shows that **understanding calling conventions** is critical when debugging
 - PE loader issues: Fixed with linker flags
 - Unix side loading: Fixed by re-enabling `--builtin`  
 - Test crashes: Fixed by using correct thiscall convention
-- DLL loads in REAPER: CreateBuffers succeeds
+- Test program works: `test_asio_start.exe` proves full audio pipeline functional
 
 **Still broken:**
-- No audio output after CreateBuffers
-- Start() not being called or failing silently
-- Crash on second REAPER start with WineASIO settings
+- Init() fails for real ASIO hosts (REAPER, CFX Lite)
+- JACK client not created when called from real hosts
+- Same code works in test but fails in real hosts
 
-**Next session:** Debug the audio pipeline after CreateBuffers
+**Key Discovery (Late Evening Session):**
+```
+[WineASIO-DBG] >>> Init(iface=01741620, sysRef=0005022c)
+[WineASIO-DBG] DllMain: fdwReason=2/3/0  # No SUCCESS message - Init FAILS!
+```
+
+The problem is NOT in CreateBuffers or Start - it's in Init()!
+The Unix side (JACK connection) fails for real hosts but works for test program.
+
+**Next session:** Add debug output to `asio_unix.c` → `asio_init()` to find why JACK client creation fails for real ASIO hosts.

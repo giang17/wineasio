@@ -386,12 +386,25 @@ static DWORD WINAPI callback_thread_proc(LPVOID arg)
 {
     IWineASIO *This = (IWineASIO *)arg;
     struct asio_get_callback_params params;
+    int loop_count = 0;
     
+    DBG_STDERR(">>> Callback thread started, This=%p, handle=%llu", This, (unsigned long long)This->handle);
     TRACE("Callback thread started\n");
     
     while (!This->stop_callback_thread) {
         params.handle = This->handle;
+        
+        if (loop_count < 5) {
+            DBG_STDERR("    Callback loop %d: calling UNIX_CALL(asio_get_callback)", loop_count);
+        }
+        
         UNIX_CALL(asio_get_callback, &params);
+        
+        if (loop_count < 5) {
+            DBG_STDERR("    Callback loop %d: UNIX_CALL returned, result=%d, buffer_switch_ready=%d", 
+                       loop_count, params.result, params.buffer_switch_ready);
+            loop_count++;
+        }
         
         if (params.result == ASE_OK && params.buffer_switch_ready && This->callbacks) {
             /* Handle sample rate change */
@@ -418,6 +431,7 @@ static DWORD WINAPI callback_thread_proc(LPVOID arg)
             /* Buffer switch */
             if (This->time_info_mode) {
                 /* Use time info mode */
+                DBG_STDERR("    Calling bufferSwitchTimeInfo (time_info_mode=1), buffer_index=%d", params.buffer_index);
                 This->host_time.timeInfo.hi = (LONG)(params.time_info.sample_position >> 32);
                 This->host_time.timeInfo.lo = (LONG)(params.time_info.sample_position & 0xFFFFFFFF);
                 This->host_time.systemTime.hi = (LONG)(params.time_info.system_time >> 32);
@@ -425,10 +439,16 @@ static DWORD WINAPI callback_thread_proc(LPVOID arg)
                 This->host_time.sampleRate = params.time_info.sample_rate;
                 This->host_time.flags = params.time_info.flags;
                 
+                DBG_STDERR("    bufferSwitchTimeInfo callback=%p", This->callbacks->bufferSwitchTimeInfo);
                 This->callbacks->bufferSwitchTimeInfo(&This->host_time, params.buffer_index, params.direct_process);
+                DBG_STDERR("    bufferSwitchTimeInfo returned OK");
             } else {
                 /* Use simple buffer switch */
+                DBG_STDERR("    Calling bufferSwitch (time_info_mode=0), buffer_index=%d, callbacks=%p", 
+                           params.buffer_index, This->callbacks);
+                DBG_STDERR("    bufferSwitch callback=%p", This->callbacks->bufferSwitch);
                 This->callbacks->bufferSwitch(params.buffer_index, params.direct_process);
+                DBG_STDERR("    bufferSwitch returned OK");
             }
         }
         
@@ -436,6 +456,7 @@ static DWORD WINAPI callback_thread_proc(LPVOID arg)
         Sleep(1);
     }
     
+    DBG_STDERR(">>> Callback thread stopping");
     TRACE("Callback thread stopped\n");
     return 0;
 }
@@ -513,6 +534,7 @@ LONG STDMETHODCALLTYPE Init(LPWINEASIO iface, void *sysRef)
     UNIX_CALL(asio_init, &params);
     
     if (params.result != ASE_OK) {
+        DBG_STDERR("<<< Init FAILED: Unix init returned %d", params.result);
         WARN("Unix init failed: %d\n", params.result);
         return 0;  /* ASIO Init returns 0 on failure */
     }
@@ -525,6 +547,8 @@ LONG STDMETHODCALLTYPE Init(LPWINEASIO iface, void *sysRef)
     TRACE("Initialized: handle=%llu inputs=%d outputs=%d rate=%f\n",
           (unsigned long long)This->handle, This->num_inputs, This->num_outputs, This->sample_rate);
     
+    DBG_STDERR("<<< Init returning SUCCESS (1), handle=%llu, inputs=%d, outputs=%d, rate=%f",
+               (unsigned long long)This->handle, This->num_inputs, This->num_outputs, This->sample_rate);
     WARN("<<< RETURNING from Init: SUCCESS (1)\n");
     return 1;  /* Success */
 }
@@ -807,39 +831,49 @@ LONG STDMETHODCALLTYPE CreateBuffers(LPWINEASIO iface, ASIOBufferInfo *bufferInf
     if (!bufferInfos || !callbacks || numChannels <= 0)
         return ASE_InvalidParameter;
     
+    DBG_STDERR("    CreateBuffers step 1: storing callbacks");
     /* Store callbacks */
     This->callbacks = callbacks;
     This->buffer_size = bufferSize;
     
+    DBG_STDERR("    CreateBuffers step 2: checking time info support");
     /* Check for time info support */
     This->time_info_mode = FALSE;
     This->can_time_code = FALSE;
     if (callbacks->asioMessage) {
+        DBG_STDERR("    CreateBuffers step 2a: calling asioMessage(1, 14) for time info...");
         if (callbacks->asioMessage(1 /* kAsioSelectorSupported */, 14 /* kAsioSupportsTimeInfo */, NULL, NULL) == 1)
             This->time_info_mode = TRUE;
+        DBG_STDERR("    CreateBuffers step 2b: calling asioMessage(1, 15) for time code...");
         if (callbacks->asioMessage(1, 15 /* kAsioSupportsTimeCode */, NULL, NULL) == 1)
             This->can_time_code = TRUE;
     }
+    DBG_STDERR("    CreateBuffers step 2 done: time_info_mode=%d, can_time_code=%d", This->time_info_mode, This->can_time_code);
     
     TRACE("time_info_mode=%d can_time_code=%d\n", This->time_info_mode, This->can_time_code);
     
+    DBG_STDERR("    CreateBuffers step 3: allocating unix_infos for %d channels", (int)numChannels);
     /* Prepare Unix call */
     unix_infos = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, numChannels * sizeof(*unix_infos));
     if (!unix_infos)
         return ASE_NoMemory;
     
+    DBG_STDERR("    CreateBuffers step 4: copying buffer info");
     for (i = 0; i < numChannels; i++) {
         unix_infos[i].is_input = bufferInfos[i].isInput;
         unix_infos[i].channel_num = bufferInfos[i].channelNum;
     }
     
+    DBG_STDERR("    CreateBuffers step 5: preparing UNIX_CALL params");
     memset(&params, 0, sizeof(params));
     params.handle = This->handle;
     params.num_channels = numChannels;
     params.buffer_size = bufferSize;
     params.buffer_infos = unix_infos;
     
+    DBG_STDERR("    CreateBuffers step 6: calling UNIX_CALL(asio_create_buffers)...");
     UNIX_CALL(asio_create_buffers, &params);
+    DBG_STDERR("    CreateBuffers step 7: UNIX_CALL returned, result=%d", (int)params.result);
     
     /* Copy buffer pointers back */
     if (params.result == ASE_OK) {
@@ -851,6 +885,7 @@ LONG STDMETHODCALLTYPE CreateBuffers(LPWINEASIO iface, ASIOBufferInfo *bufferInf
     
     HeapFree(GetProcessHeap(), 0, unix_infos);
     
+    DBG_STDERR("<<< CreateBuffers returning %ld (ASE_OK=%d)", (long)params.result, ASE_OK);
     return params.result;
 }
 
