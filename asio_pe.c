@@ -43,6 +43,51 @@ static wine_unix_call_dispatcher_t p__wine_unix_call_dispatcher = NULL;
 
 #include "unixlib.h"
 
+/*
+ * Thiscall wrapper macros for 32-bit ASIO compatibility
+ * 
+ * ASIO uses the thiscall calling convention on 32-bit Windows, where the
+ * 'this' pointer is passed in ECX register instead of on the stack.
+ * MSVC-compiled ASIO hosts (like REAPER, Cubase, etc.) expect this.
+ * 
+ * These wrappers convert thiscall to stdcall by:
+ * 1. Popping the return address
+ * 2. Pushing ECX (this pointer) onto the stack
+ * 3. Pushing the return address back
+ * 4. Jumping to the actual function
+ *
+ * For MinGW cross-compiler, we use naked functions with inline asm.
+ * MinGW uses underscore prefix for C symbols on 32-bit Windows.
+ */
+#ifdef __i386__  /* thiscall wrappers are i386-specific */
+
+/* MinGW uses different assembly syntax than Wine's winegcc */
+#define THISCALL(func) __thiscall_ ## func
+
+/* 
+ * Define thiscall wrapper using naked function + inline asm
+ * This works with MinGW cross-compiler
+ * Note: MinGW adds underscore prefix to C symbols, so we use _func
+ */
+#define DEFINE_THISCALL_WRAPPER(func, args) \
+    void __attribute__((naked)) __thiscall_ ## func(void) { \
+        __asm__ __volatile__( \
+            "popl %%eax\n\t" \
+            "pushl %%ecx\n\t" \
+            "pushl %%eax\n\t" \
+            "jmp _" #func "\n\t" \
+            ::: "memory" \
+        ); \
+    }
+
+#else /* __i386__ */
+
+/* On 64-bit, thiscall is the same as the standard calling convention */
+#define THISCALL(func) func
+#define DEFINE_THISCALL_WRAPPER(func,args) /* nothing */
+
+#endif /* __i386__ */
+
 /* NTSTATUS definitions for mingw if not available */
 #ifndef STATUS_SUCCESS
 #define STATUS_SUCCESS ((NTSTATUS)0x00000000L)
@@ -449,7 +494,7 @@ static ULONG STDMETHODCALLTYPE Release(LPWINEASIO iface)
 }
 
 /* IASIO methods */
-static LONG STDMETHODCALLTYPE Init(LPWINEASIO iface, void *sysRef)
+LONG STDMETHODCALLTYPE Init(LPWINEASIO iface, void *sysRef)
 {
     IWineASIO *This = (IWineASIO *)iface;
     struct asio_init_params params;
@@ -484,7 +529,7 @@ static LONG STDMETHODCALLTYPE Init(LPWINEASIO iface, void *sysRef)
     return 1;  /* Success */
 }
 
-static void STDMETHODCALLTYPE GetDriverName(LPWINEASIO iface, char *name)
+void STDMETHODCALLTYPE GetDriverName(LPWINEASIO iface, char *name)
 {
     WARN(">>> CALLED: GetDriverName(iface=%p, name=%p)\n", iface, name);
     TRACE("iface=%p name=%p\n", iface, name);
@@ -492,7 +537,7 @@ static void STDMETHODCALLTYPE GetDriverName(LPWINEASIO iface, char *name)
     WARN("<<< RETURNING from GetDriverName\n");
 }
 
-static LONG STDMETHODCALLTYPE GetDriverVersion(LPWINEASIO iface)
+LONG STDMETHODCALLTYPE GetDriverVersion(LPWINEASIO iface)
 {
     WARN(">>> CALLED: GetDriverVersion(iface=%p)\n", iface);
     TRACE("iface=%p\n", iface);
@@ -500,7 +545,7 @@ static LONG STDMETHODCALLTYPE GetDriverVersion(LPWINEASIO iface)
     return WINEASIO_VERSION;
 }
 
-static void STDMETHODCALLTYPE GetErrorMessage(LPWINEASIO iface, char *string)
+void STDMETHODCALLTYPE GetErrorMessage(LPWINEASIO iface, char *string)
 {
     WARN(">>> CALLED: GetErrorMessage(iface=%p, string=%p)\n", iface, string);
     TRACE("iface=%p string=%p\n", iface, string);
@@ -508,7 +553,7 @@ static void STDMETHODCALLTYPE GetErrorMessage(LPWINEASIO iface, char *string)
     WARN("<<< RETURNING from GetErrorMessage\n");
 }
 
-static LONG STDMETHODCALLTYPE Start(LPWINEASIO iface)
+LONG STDMETHODCALLTYPE Start(LPWINEASIO iface)
 {
     IWineASIO *This = (IWineASIO *)iface;
     struct asio_start_params params = { .handle = This->handle };
@@ -547,7 +592,7 @@ static LONG STDMETHODCALLTYPE Start(LPWINEASIO iface)
     return ASE_OK;
 }
 
-static LONG STDMETHODCALLTYPE Stop(LPWINEASIO iface)
+LONG STDMETHODCALLTYPE Stop(LPWINEASIO iface)
 {
     IWineASIO *This = (IWineASIO *)iface;
     struct asio_stop_params params = { .handle = This->handle };
@@ -568,7 +613,7 @@ static LONG STDMETHODCALLTYPE Stop(LPWINEASIO iface)
     return params.result;
 }
 
-static LONG STDMETHODCALLTYPE GetChannels(LPWINEASIO iface, LONG *numInputChannels, LONG *numOutputChannels)
+LONG STDMETHODCALLTYPE GetChannels(LPWINEASIO iface, LONG *numInputChannels, LONG *numOutputChannels)
 {
     IWineASIO *This = (IWineASIO *)iface;
     struct asio_get_channels_params params = { .handle = This->handle };
@@ -587,7 +632,7 @@ static LONG STDMETHODCALLTYPE GetChannels(LPWINEASIO iface, LONG *numInputChanne
     return params.result;
 }
 
-static LONG STDMETHODCALLTYPE GetLatencies(LPWINEASIO iface, LONG *inputLatency, LONG *outputLatency)
+LONG STDMETHODCALLTYPE GetLatencies(LPWINEASIO iface, LONG *inputLatency, LONG *outputLatency)
 {
     IWineASIO *This = (IWineASIO *)iface;
     struct asio_get_latencies_params params = { .handle = This->handle };
@@ -606,7 +651,7 @@ static LONG STDMETHODCALLTYPE GetLatencies(LPWINEASIO iface, LONG *inputLatency,
     return params.result;
 }
 
-static LONG STDMETHODCALLTYPE GetBufferSize(LPWINEASIO iface, LONG *minSize, LONG *maxSize, LONG *preferredSize, LONG *granularity)
+LONG STDMETHODCALLTYPE GetBufferSize(LPWINEASIO iface, LONG *minSize, LONG *maxSize, LONG *preferredSize, LONG *granularity)
 {
     IWineASIO *This = (IWineASIO *)iface;
     struct asio_get_buffer_size_params params = { .handle = This->handle };
@@ -624,7 +669,7 @@ static LONG STDMETHODCALLTYPE GetBufferSize(LPWINEASIO iface, LONG *minSize, LON
     return params.result;
 }
 
-static LONG STDMETHODCALLTYPE CanSampleRate(LPWINEASIO iface, double sampleRate)
+LONG STDMETHODCALLTYPE CanSampleRate(LPWINEASIO iface, double sampleRate)
 {
     IWineASIO *This = (IWineASIO *)iface;
     struct asio_can_sample_rate_params params = { .handle = This->handle, .sample_rate = sampleRate };
@@ -637,7 +682,7 @@ static LONG STDMETHODCALLTYPE CanSampleRate(LPWINEASIO iface, double sampleRate)
     return params.result;
 }
 
-static LONG STDMETHODCALLTYPE GetSampleRate(LPWINEASIO iface, double *currentRate)
+LONG STDMETHODCALLTYPE GetSampleRate(LPWINEASIO iface, double *currentRate)
 {
     IWineASIO *This = (IWineASIO *)iface;
     struct asio_get_sample_rate_params params = { .handle = This->handle };
@@ -656,7 +701,7 @@ static LONG STDMETHODCALLTYPE GetSampleRate(LPWINEASIO iface, double *currentRat
     return params.result;
 }
 
-static LONG STDMETHODCALLTYPE SetSampleRate(LPWINEASIO iface, double sampleRate)
+LONG STDMETHODCALLTYPE SetSampleRate(LPWINEASIO iface, double sampleRate)
 {
     IWineASIO *This = (IWineASIO *)iface;
     struct asio_set_sample_rate_params params = { .handle = This->handle, .sample_rate = sampleRate };
@@ -672,7 +717,7 @@ static LONG STDMETHODCALLTYPE SetSampleRate(LPWINEASIO iface, double sampleRate)
     return params.result;
 }
 
-static LONG STDMETHODCALLTYPE GetClockSources(LPWINEASIO iface, void *clocks, LONG *numSources)
+LONG STDMETHODCALLTYPE GetClockSources(LPWINEASIO iface, void *clocks, LONG *numSources)
 {
     WARN(">>> CALLED: GetClockSources(iface=%p, clocks=%p, numSources=%p)\n", iface, clocks, numSources);
     TRACE("iface=%p\n", iface);
@@ -685,7 +730,7 @@ static LONG STDMETHODCALLTYPE GetClockSources(LPWINEASIO iface, void *clocks, LO
     return ASE_OK;
 }
 
-static LONG STDMETHODCALLTYPE SetClockSource(LPWINEASIO iface, LONG reference)
+LONG STDMETHODCALLTYPE SetClockSource(LPWINEASIO iface, LONG reference)
 {
     WARN(">>> CALLED: SetClockSource(iface=%p, reference=%d)\n", iface, reference);
     TRACE("iface=%p ref=%d\n", iface, reference);
@@ -695,7 +740,7 @@ static LONG STDMETHODCALLTYPE SetClockSource(LPWINEASIO iface, LONG reference)
     return ASE_OK;
 }
 
-static LONG STDMETHODCALLTYPE GetSamplePosition(LPWINEASIO iface, ASIOSamples *sPos, ASIOTimeStamp *tStamp)
+LONG STDMETHODCALLTYPE GetSamplePosition(LPWINEASIO iface, ASIOSamples *sPos, ASIOTimeStamp *tStamp)
 {
     IWineASIO *This = (IWineASIO *)iface;
     struct asio_get_sample_position_params params = { .handle = This->handle };
@@ -715,7 +760,7 @@ static LONG STDMETHODCALLTYPE GetSamplePosition(LPWINEASIO iface, ASIOSamples *s
     return params.result;
 }
 
-static LONG STDMETHODCALLTYPE GetChannelInfo(LPWINEASIO iface, ASIOChannelInfo *info)
+LONG STDMETHODCALLTYPE GetChannelInfo(LPWINEASIO iface, ASIOChannelInfo *info)
 {
     IWineASIO *This = (IWineASIO *)iface;
     struct asio_get_channel_info_params params;
@@ -742,7 +787,7 @@ static LONG STDMETHODCALLTYPE GetChannelInfo(LPWINEASIO iface, ASIOChannelInfo *
     return params.result;
 }
 
-static LONG STDMETHODCALLTYPE CreateBuffers(LPWINEASIO iface, ASIOBufferInfo *bufferInfos, LONG numChannels, LONG bufferSize, ASIOCallbacks *callbacks)
+LONG STDMETHODCALLTYPE CreateBuffers(LPWINEASIO iface, ASIOBufferInfo *bufferInfos, LONG numChannels, LONG bufferSize, ASIOCallbacks *callbacks)
 {
     IWineASIO *This = (IWineASIO *)iface;
     struct asio_create_buffers_params params;
@@ -809,7 +854,7 @@ static LONG STDMETHODCALLTYPE CreateBuffers(LPWINEASIO iface, ASIOBufferInfo *bu
     return params.result;
 }
 
-static LONG STDMETHODCALLTYPE DisposeBuffers(LPWINEASIO iface)
+LONG STDMETHODCALLTYPE DisposeBuffers(LPWINEASIO iface)
 {
     IWineASIO *This = (IWineASIO *)iface;
     struct asio_dispose_buffers_params params = { .handle = This->handle };
@@ -823,7 +868,7 @@ static LONG STDMETHODCALLTYPE DisposeBuffers(LPWINEASIO iface)
     return params.result;
 }
 
-static LONG STDMETHODCALLTYPE ControlPanel(LPWINEASIO iface)
+LONG STDMETHODCALLTYPE ControlPanel(LPWINEASIO iface)
 {
     IWineASIO *This = (IWineASIO *)iface;
     struct asio_control_panel_params params = { .handle = This->handle };
@@ -835,7 +880,7 @@ static LONG STDMETHODCALLTYPE ControlPanel(LPWINEASIO iface)
     return params.result;
 }
 
-static LONG STDMETHODCALLTYPE Future(LPWINEASIO iface, LONG selector, void *opt)
+LONG STDMETHODCALLTYPE Future(LPWINEASIO iface, LONG selector, void *opt)
 {
     IWineASIO *This = (IWineASIO *)iface;
     struct asio_future_params params;
@@ -852,7 +897,7 @@ static LONG STDMETHODCALLTYPE Future(LPWINEASIO iface, LONG selector, void *opt)
     return params.result;
 }
 
-static LONG STDMETHODCALLTYPE OutputReady(LPWINEASIO iface)
+LONG STDMETHODCALLTYPE OutputReady(LPWINEASIO iface)
 {
     IWineASIO *This = (IWineASIO *)iface;
     struct asio_output_ready_params params = { .handle = This->handle };
@@ -862,32 +907,61 @@ static LONG STDMETHODCALLTYPE OutputReady(LPWINEASIO iface)
     return params.result;
 }
 
-/* VTable */
+/*
+ * Define thiscall wrappers for all ASIO methods (32-bit only)
+ * IUnknown methods (QueryInterface, AddRef, Release) use stdcall, not thiscall
+ * ASIO methods use thiscall on 32-bit Windows
+ */
+DEFINE_THISCALL_WRAPPER(Init, 8)
+DEFINE_THISCALL_WRAPPER(GetDriverName, 8)
+DEFINE_THISCALL_WRAPPER(GetDriverVersion, 4)
+DEFINE_THISCALL_WRAPPER(GetErrorMessage, 8)
+DEFINE_THISCALL_WRAPPER(Start, 4)
+DEFINE_THISCALL_WRAPPER(Stop, 4)
+DEFINE_THISCALL_WRAPPER(GetChannels, 12)
+DEFINE_THISCALL_WRAPPER(GetLatencies, 12)
+DEFINE_THISCALL_WRAPPER(GetBufferSize, 20)
+DEFINE_THISCALL_WRAPPER(CanSampleRate, 12)
+DEFINE_THISCALL_WRAPPER(GetSampleRate, 8)
+DEFINE_THISCALL_WRAPPER(SetSampleRate, 12)
+DEFINE_THISCALL_WRAPPER(GetClockSources, 12)
+DEFINE_THISCALL_WRAPPER(SetClockSource, 8)
+DEFINE_THISCALL_WRAPPER(GetSamplePosition, 12)
+DEFINE_THISCALL_WRAPPER(GetChannelInfo, 8)
+DEFINE_THISCALL_WRAPPER(CreateBuffers, 20)
+DEFINE_THISCALL_WRAPPER(DisposeBuffers, 4)
+DEFINE_THISCALL_WRAPPER(ControlPanel, 4)
+DEFINE_THISCALL_WRAPPER(Future, 12)
+DEFINE_THISCALL_WRAPPER(OutputReady, 4)
+
+/* VTable - uses thiscall wrappers for ASIO methods on 32-bit */
 static const IWineASIOVtbl WineASIO_Vtbl = {
+    /* IUnknown methods - use stdcall (no wrapper needed) */
     QueryInterface,
     AddRef,
     Release,
-    Init,
-    GetDriverName,
-    GetDriverVersion,
-    GetErrorMessage,
-    Start,
-    Stop,
-    GetChannels,
-    GetLatencies,
-    GetBufferSize,
-    CanSampleRate,
-    GetSampleRate,
-    SetSampleRate,
-    GetClockSources,
-    SetClockSource,
-    GetSamplePosition,
-    GetChannelInfo,
-    CreateBuffers,
-    DisposeBuffers,
-    ControlPanel,
-    Future,
-    OutputReady
+    /* ASIO methods - use thiscall wrappers on 32-bit */
+    (void*)THISCALL(Init),
+    (void*)THISCALL(GetDriverName),
+    (void*)THISCALL(GetDriverVersion),
+    (void*)THISCALL(GetErrorMessage),
+    (void*)THISCALL(Start),
+    (void*)THISCALL(Stop),
+    (void*)THISCALL(GetChannels),
+    (void*)THISCALL(GetLatencies),
+    (void*)THISCALL(GetBufferSize),
+    (void*)THISCALL(CanSampleRate),
+    (void*)THISCALL(GetSampleRate),
+    (void*)THISCALL(SetSampleRate),
+    (void*)THISCALL(GetClockSources),
+    (void*)THISCALL(SetClockSource),
+    (void*)THISCALL(GetSamplePosition),
+    (void*)THISCALL(GetChannelInfo),
+    (void*)THISCALL(CreateBuffers),
+    (void*)THISCALL(DisposeBuffers),
+    (void*)THISCALL(ControlPanel),
+    (void*)THISCALL(Future),
+    (void*)THISCALL(OutputReady)
 };
 
 /* Create WineASIO instance */
