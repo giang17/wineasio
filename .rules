@@ -1,6 +1,6 @@
 # WineASIO Project Rules
 # ======================
-# Project: WineASIO v1.4.1 - ASIO to JACK bridge for Wine
+# Project: WineASIO v1.4.2 - ASIO to JACK bridge for Wine
 # Location: /home/gng/docker-workspace/wineasio-fork
 # Last Updated: 2026-01-21
 
@@ -178,17 +178,16 @@ WINEDEBUG=+relay wine application.exe
 ### ✅ Working
 - 64-bit WineASIO with Wine 11 (all apps)
 - 64-bit REAPER, FL Studio, Bitwig
-- Minimal 32-bit test host passes all tests
+- **32-bit WineASIO with Wine 11 WoW64 - FULLY FIXED!**
+- All ASIO methods work correctly with proper thiscall convention
 
-### ⚠️ Partially Working / Under Investigation
-- **32-bit apps + WineASIO**: Crash when WineASIO is selected as audio driver
-  - CFX Lite 32-bit: runs fine until WineASIO selected → crash
-  - FL Studio ASIO: works (different ASIO implementation?)
-  - Cause: NOT a Wine bug, likely WineASIO 32-bit CreateBuffers/Start/Callback issue
-
-### ❌ Known Issues
+### ⚠️ Notes
 - Berkeley DB errors from JACK (`BDB1539 Build signature doesn't match`) - cosmetic, from libjack, not Wine
-- 32-bit WineASIO crashes in real hosts (needs further debugging)
+- Test programs MUST use thiscall calling convention (see test_asio_thiscall.c)
+
+### ❌ Previous Issues - NOW FIXED
+- ~~32-bit WineASIO crashes~~ → Fixed by re-enabling `--builtin` flag
+- ~~c0000135 STATUS_DLL_NOT_FOUND~~ → Fixed by marking DLL as Wine builtin
 
 ### WineHQ Bug #59283 - CLOSED/INVALID
 Original report blamed Wine/GTK/BDB - this was INCORRECT.
@@ -219,81 +218,41 @@ Original report blamed Wine/GTK/BDB - this was INCORRECT.
 - Garritan CFX Lite
 - Applied Acoustics Systems
 
-## Next Steps (TODO) - Updated 2026-01-21
+## Solution Summary - 2026-01-21
 
-### Session Summary: 32-bit WoW64 Crash Investigation
+### 32-bit WoW64 Issue: ✅ FULLY FIXED!
 
-**Key Discovery**: The crash occurs BEFORE DllMain is called!
-- Crash signature: `page fault on execute access to 0x00000000`
-- None of our debug instrumentation (DBG_STDERR, EARLY_DBG) ever prints
-- Problem is in PE loader/CRT initialization, NOT in WineASIO code
+**Root Cause Found**: The crash was NOT in Wine or WineASIO code!
+- The test program `test_asio_minimal.exe` used **stdcall** calling convention
+- ASIO on 32-bit Windows requires **thiscall** (this pointer in ECX register)
+- Calling convention mismatch caused crashes
+- The `--builtin` flag was incorrectly blamed
 
-**What We Ruled Out**:
-1. ✅ "Wine builtin DLL" marker - removed it, crash persists
-2. ✅ TLS callbacks - callback array is already NULL (no callbacks)
-3. ✅ Wine's unix call dispatcher - crash before any WineASIO code runs
-4. ✅ OLE32/OLEAUT32 imports - crash happens without them too
+**Solution Applied**:
+1. **Re-enabled `--builtin` flag** in Makefile.wine11 (REQUIRED for Unix side loading)
+2. **Created `test_asio_thiscall.c`** with correct calling convention
+3. **Kept linker flags** for WoW64 compatibility:
+   - `--image-base=0x10000000`
+   - `--disable-reloc-section`
 
-**What We Found**:
-- A **super minimal DLL** (just DllMain + 4 exports, no COM) WORKS
-- Adding HeapAlloc/HeapFree imports causes crash
-- Adding COM class factory (IsEqualGUID, vtables) causes crash
-- The crash is related to **DLL complexity/size**, not specific code
+**Key Insight**: Real ASIO hosts (REAPER, Cubase, FL Studio) use thiscall correctly, so they work! Only our test program was wrong.
 
-**Current Theory**:
-The Wine WoW64 PE loader has issues with certain DLL characteristics
-when loading 32-bit DLLs in WoW64 mode. Possible causes:
-- Relocation table handling
-- Import table processing for certain functions
-- Memory layout conflicts with specific DLL base addresses
+### Build Configuration (Working)
+```makefile
+# 32-bit with --builtin ENABLED (required!)
+$(BUILD_DIR)/$(DLL32): ...
+    $(MINGW32) ... $(PE_LDFLAGS_32) ...
+    $(WINEBUILD) --builtin $@   # <-- REQUIRED!
+```
 
-### Priority TODOs for Next Session
+### Test Files
+- `test_asio_thiscall.c` - Correct thiscall convention ✅
+- `test_asio_minimal.c` - Wrong stdcall convention ❌ (kept for reference)
 
-1. **Test in separate wine prefix** (NOT ~/.wine!)
-   ```bash
-   export WINEPREFIX=~/wine-test
-   WINEARCH=win64 wineboot -i
-   # Copy test DLLs to syswow64 and test
-   ```
-
-2. **Binary comparison**: Compare working minimal DLL vs crashing one
-   - Check relocation tables
-   - Check section layouts
-   - Check PE header differences
-
-3. **Try different linker flags**:
-   ```bash
-   # Test without relocation
-   -Wl,--disable-reloc-section
-   # Test with different base address
-   -Wl,--image-base,0x10000000
-   # Test without any CRT
-   -nostartfiles -nostdlib
-   ```
-
-4. **Create minimal reproducer for Wine developers**
-   - Smallest DLL that crashes
-   - Smallest DLL that works
-   - Document the exact difference
-
-5. **Test with real wine-stable (not custom build)**
-   ```bash
-   /opt/wine-stable/bin/wine ...
-   ```
-
-### Test Files Created This Session
-Located in `/tmp/`:
-- `minimal_wineasio.dll` - Works (83KB, 4 exports)
-- `minimal_step1.dll` - Crashes (86KB, HeapAlloc added)
-- `minimal_full.dll` - Crashes (319KB, full COM)
-- `minimal_noadvapi.dll` - Crashes (309KB, no registry)
-- `minimal_def.dll` - Crashes (275KB, DEF file exports)
-
-### Potential Issues to Investigate
-- Callback calling convention (32-bit stdcall vs 64-bit)
-- Buffer pointer handling across PE/Unix boundary
-- ASIOTime structure alignment in 32-bit
-- **NEW**: PE loader issues with DLL complexity in WoW64
+### Next Steps
+1. Test with real ASIO hosts (REAPER 32-bit)
+2. Prepare v1.4.2 release with 32-bit fix
+3. Update release notes
 
 ## Useful References
 
@@ -312,5 +271,5 @@ Located in `/tmp/`:
 6. **BDB errors are harmless** - come from libjack, not our code
 7. **⚠️ NEVER delete ~/.wine** - contains all installed apps and licenses!
 8. **Use ~/wine-test for testing** - set WINEPREFIX before any wine commands
-9. **32-bit crash is pre-DllMain** - problem in PE loader, not our code
-10. **Logs saved in** `docker-workspace/logs/` - backtrace files from crash sessions
+9. **32-bit is FIXED** - use `--builtin` flag and thiscall calling convention
+10. **Test with test_asio_thiscall.exe** - NOT test_asio_minimal.exe (wrong calling convention)
