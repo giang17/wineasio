@@ -2,7 +2,7 @@
 # ======================
 # Project: WineASIO v1.4.2 - ASIO to JACK bridge for Wine
 # Location: /home/gng/docker-workspace/wineasio-fork
-# Last Updated: 2026-01-21 21:00
+# Last Updated: 2026-01-21 23:00
 
 ## ⚠️ CRITICAL WARNINGS FOR AI ASSISTANT ⚠️
 
@@ -93,7 +93,8 @@ wineasio-fork/
 ├── build_wine11/       # Build output directory
 ├── test_asio_*.c/exe   # Test programs
 └── docs/
-    └── WINE11_WOW64_ARCHITECTURE.md  # Detailed architecture docs
+    ├── WINE11_WOW64_ARCHITECTURE.md   # Architecture details
+    └── WINE11_WOW64_32BIT_SOLUTION.md # Problem & solution documentation
 ```
 
 ## Wine Installations on This System
@@ -154,25 +155,32 @@ WINEDEBUG=-all wine test_asio_start.exe 2>&1 | grep -E "WineASIO|OK|ERROR"
 
 ### With Real Applications
 ```bash
-# 64-bit REAPER (works)
+# 64-bit REAPER
 wine "$HOME/.wine/drive_c/Program Files/REAPER (x64)/reaper.exe"
 
-# 32-bit REAPER (in progress)
+# 32-bit REAPER
 wine "$HOME/.wine/drive_c/Program Files (x86)/REAPER/reaper.exe"
+
+# Garritan CFX Lite
+wine "$HOME/.wine/drive_c/Program Files/Garritan/CFX Lite/CFX Lite.exe"
 ```
 
 ## Current Status (2026-01-21)
 
-### ✅ Working
-- 64-bit WineASIO with all apps
-- 32-bit Unix library loading (now correctly built as 64-bit)
-- Init(), CreateBuffers() succeed for 32-bit
-- JACK client creation works
+### ✅ SOLVED - All Working!
 
-### ⚠️ In Progress (32-bit)
-- Audio buffer pointer sharing between PE and Unix address spaces
-- REAPER 32-bit audio playback
-- Buffer allocated on PE side to avoid address space issues
+| Application | Architecture | Status |
+|-------------|--------------|--------|
+| REAPER 64-bit | 64-bit PE | ✅ Working |
+| REAPER 32-bit | 32-bit PE | ✅ Working |
+| Garritan CFX Lite | 32-bit PE | ✅ Working |
+| test_asio_interactive.exe | 32-bit PE | ✅ Working |
+
+### Key Fixes Applied
+1. **Build System**: Unix .so built with `-m64` (not `-m32`)
+2. **Installation**: Unix .so installed to `x86_64-unix/` (not `i386-unix/`)
+3. **Buffer Allocation**: Audio buffers allocated on PE side (HeapAlloc)
+4. **JACK Callback**: Uses `pe_buffer[]` instead of `audio_buffer`
 
 ### Key Test Programs
 - `test_asio_interactive.exe` - Keeps JACK connection open for inspection
@@ -190,9 +198,20 @@ wine "$HOME/.wine/drive_c/Program Files (x86)/REAPER/reaper.exe"
 7. **Requires JACK/PipeWire running** for audio tests
 8. **Logs in** `docker-workspace/logs/`
 
+## Troubleshooting Quick Reference
+
+| Symptom | Cause | Fix |
+|---------|-------|-----|
+| No `[WineASIO-Unix]` output | Unix .so not loading | Check it's 64-bit, in `x86_64-unix/` |
+| `audio_buffer=(nil)` warnings | Old code using Unix-side buffers | Use `pe_buffer[]` in JACK callback |
+| No JACK ports in Patchance | JACK client not activated | Check `asio_init()` succeeds |
+| Crash in CreateBuffers | Buffer allocation failed | Check PE-side HeapAlloc |
+| REAPER behavior: deactivates on window switch | Normal REAPER behavior | Not a WineASIO bug |
+
 ## Useful References
 
 - Wine PE/Unix split: https://wiki.winehq.org/Dll_Separation
 - JACK API: https://jackaudio.org/api/
 - WineASIO upstream: https://github.com/wineasio/wineasio
 - Architecture details: `docs/WINE11_WOW64_ARCHITECTURE.md`
+- Solution details: `docs/WINE11_WOW64_32BIT_SOLUTION.md`
