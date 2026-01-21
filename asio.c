@@ -600,10 +600,14 @@ HIDDEN LONG STDMETHODCALLTYPE Start(LPWINEASIO iface)
     int             i;
     DWORD           time;
 
+    fprintf(stderr, "[WineASIO-DBG] >>> Start(iface=%p)\n", iface);
     TRACE("iface: %p\n", iface);
 
     if (This->host_driver_state != Prepared)
+    {
+        fprintf(stderr, "[WineASIO-DBG]     Start FAILED: host_driver_state=%d (not Prepared)\n", This->host_driver_state);
         return -1000;
+    }
 
     /* Zero the audio buffer */
     for (i = 0; i < (This->wineasio_number_inputs + This->wineasio_number_outputs) * 2 * This->host_current_buffersize; i++)
@@ -643,6 +647,7 @@ HIDDEN LONG STDMETHODCALLTYPE Start(LPWINEASIO iface)
     This->host_buffer_index = This->host_buffer_index ? 0 : 1;
 
     This->host_driver_state = Running;
+    fprintf(stderr, "[WineASIO-DBG]     Start SUCCESS - driver_state now Running\n");
     TRACE("WineASIO successfully loaded\n");
     return 0;
 }
@@ -659,12 +664,17 @@ HIDDEN LONG STDMETHODCALLTYPE Stop(LPWINEASIO iface)
 {
     IWineASIOImpl   *This = (IWineASIOImpl*)iface;
 
+    fprintf(stderr, "[WineASIO-DBG] >>> Stop(iface=%p)\n", iface);
     TRACE("iface: %p\n", iface);
 
     if (This->host_driver_state != Running)
+    {
+        fprintf(stderr, "[WineASIO-DBG]     Stop FAILED: host_driver_state=%d (not Running)\n", This->host_driver_state);
         return -1000;
+    }
 
     This->host_driver_state = Prepared;
+    fprintf(stderr, "[WineASIO-DBG]     Stop SUCCESS - driver_state now Prepared\n");
 
     return 0;
 }
@@ -762,10 +772,16 @@ HIDDEN LONG STDMETHODCALLTYPE CanSampleRate(LPWINEASIO iface, double sampleRate)
 {
     IWineASIOImpl   *This = (IWineASIOImpl*)iface;
 
+    fprintf(stderr, "[WineASIO-DBG] >>> CanSampleRate(iface=%p, sampleRate=%f)\n", iface, sampleRate);
+    fprintf(stderr, "[WineASIO-DBG]     host_sample_rate=%f\n", This->host_sample_rate);
     TRACE("iface: %p, Samplerate = %li, requested samplerate = %li\n", iface, (long) This->host_sample_rate, (long) sampleRate);
 
     if (sampleRate != This->host_sample_rate)
+    {
+        fprintf(stderr, "[WineASIO-DBG]     CanSampleRate FAILED: rates don't match (returning -995)\n");
         return -995;
+    }
+    fprintf(stderr, "[WineASIO-DBG]     CanSampleRate SUCCESS\n");
     return 0;
 }
 
@@ -781,12 +797,17 @@ HIDDEN LONG STDMETHODCALLTYPE GetSampleRate(LPWINEASIO iface, double *sampleRate
 {
     IWineASIOImpl   *This = (IWineASIOImpl*)iface;
 
+    fprintf(stderr, "[WineASIO-DBG] >>> GetSampleRate(iface=%p, sampleRate=%p)\n", iface, sampleRate);
     TRACE("iface: %p, Sample rate is %i\n", iface, (int) This->host_sample_rate);
 
     if (!sampleRate)
+    {
+        fprintf(stderr, "[WineASIO-DBG]     GetSampleRate FAILED: sampleRate pointer is NULL (returning -998)\n");
         return -998;
+    }
 
     *sampleRate = This->host_sample_rate;
+    fprintf(stderr, "[WineASIO-DBG]     GetSampleRate SUCCESS: returning %f\n", This->host_sample_rate);
     return 0;
 }
 
@@ -1070,6 +1091,8 @@ HIDDEN LONG STDMETHODCALLTYPE CreateBuffers(LPWINEASIO iface, BufferInformation 
 
     /* at this point all the connections are made and the jack process callback is outputting silence */
     This->host_driver_state = Prepared;
+    fprintf(stderr, "[WineASIO-DBG]     CreateBuffers SUCCESS - returning 0, driver_state now Prepared\n");
+    fprintf(stderr, "[WineASIO-DBG]     host_active_inputs=%d, host_active_outputs=%d\n", (int)This->host_active_inputs, (int)This->host_active_outputs);
     return 0;
 }
 
