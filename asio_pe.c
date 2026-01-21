@@ -324,6 +324,14 @@ struct IWineASIO {
     
     /* Configuration */
     struct asio_config config;
+    
+    /* PE-side audio buffers (Wine 11 WoW64 fix)
+     * In Wine 11 WoW64, Unix side runs in 64-bit address space while
+     * 32-bit PE code runs in emulated 32-bit space. Buffers must be
+     * allocated on PE side to be accessible by 32-bit Windows code. */
+    void *pe_audio_buffers;     /* Block of all audio buffers */
+    LONG pe_num_buffers;        /* Number of channels */
+    LONG pe_buffer_size;        /* Samples per buffer */
 };
 
 /* {48D0C522-BFCC-45cc-8B84-17F25F33E6E8} */
@@ -531,7 +539,14 @@ LONG STDMETHODCALLTYPE Init(LPWINEASIO iface, void *sysRef)
     memset(&params, 0, sizeof(params));
     params.config = This->config;
     
+    DBG_STDERR("    About to call UNIX_CALL(asio_init, &params)...");
+    DBG_STDERR("    params.config: inputs=%d outputs=%d bufsize=%d client='%s'",
+               params.config.num_inputs, params.config.num_outputs,
+               params.config.preferred_bufsize, params.config.client_name);
+    
     UNIX_CALL(asio_init, &params);
+    
+    DBG_STDERR("    UNIX_CALL(asio_init) returned, params.result=%d", (int)params.result);
     
     if (params.result != ASE_OK) {
         DBG_STDERR("<<< Init FAILED: Unix init returned %d", params.result);
@@ -582,7 +597,8 @@ LONG STDMETHODCALLTYPE Start(LPWINEASIO iface)
     IWineASIO *This = (IWineASIO *)iface;
     struct asio_start_params params = { .handle = This->handle };
     
-    DBG_STDERR(">>> Start(iface=%p)", iface);
+    DBG_STDERR(">>> Start(iface=%p) ENTERED", iface);
+    DBG_STDERR("    This=%p, This->handle=%llu", This, (unsigned long long)(This ? This->handle : 0));
     WARN(">>> CALLED: Start(iface=%p)\n", iface);
     TRACE("iface=%p\n", iface);
     
@@ -817,6 +833,7 @@ LONG STDMETHODCALLTYPE CreateBuffers(LPWINEASIO iface, ASIOBufferInfo *bufferInf
     struct asio_create_buffers_params params;
     struct asio_buffer_info *unix_infos;
     int i;
+    size_t buffer_bytes;
     
     DBG_STDERR(">>> CreateBuffers(iface=%p, bufferInfos=%p, numChannels=%d, bufferSize=%d, callbacks=%p)", iface, bufferInfos, numChannels, bufferSize, callbacks);
     if (callbacks) {
@@ -858,10 +875,55 @@ LONG STDMETHODCALLTYPE CreateBuffers(LPWINEASIO iface, ASIOBufferInfo *bufferInf
     if (!unix_infos)
         return ASE_NoMemory;
     
-    DBG_STDERR("    CreateBuffers step 4: copying buffer info");
+    /* 
+     * WINE 11 WoW64 FIX: Allocate audio buffers on the PE (Windows) side!
+     * 
+     * In Wine 11 WoW64, the Unix side runs in 64-bit address space while
+     * the 32-bit PE code runs in emulated 32-bit address space. Buffers
+     * allocated with calloc() on Unix side have 64-bit addresses that
+     * cannot be accessed by 32-bit Windows code.
+     * 
+     * Solution: Allocate buffers here on PE side using HeapAlloc(), which
+     * guarantees 32-bit compatible addresses. Pass these pointers to Unix
+     * side for use in JACK callbacks.
+     */
+    buffer_bytes = sizeof(float) * bufferSize;  /* JACK uses float samples */
+    
+    DBG_STDERR("    CreateBuffers step 3a: allocating PE-side audio buffers (%d bytes per buffer)", (int)buffer_bytes);
+    
+    /* Free old PE-side buffers if any */
+    if (This->pe_audio_buffers) {
+        HeapFree(GetProcessHeap(), 0, This->pe_audio_buffers);
+        This->pe_audio_buffers = NULL;
+    }
+    
+    /* Allocate one big block for all buffers: numChannels * 2 (double-buffer) * buffer_bytes */
+    This->pe_audio_buffers = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, 
+                                        numChannels * 2 * buffer_bytes);
+    if (!This->pe_audio_buffers) {
+        HeapFree(GetProcessHeap(), 0, unix_infos);
+        return ASE_NoMemory;
+    }
+    This->pe_num_buffers = numChannels;
+    This->pe_buffer_size = bufferSize;
+    
+    DBG_STDERR("    CreateBuffers step 3b: PE buffer block at %p", This->pe_audio_buffers);
+    
+    DBG_STDERR("    CreateBuffers step 4: copying buffer info and assigning PE-side pointers");
     for (i = 0; i < numChannels; i++) {
+        char *base = (char *)This->pe_audio_buffers;
+        size_t offset0 = (i * 2) * buffer_bytes;       /* First buffer for this channel */
+        size_t offset1 = (i * 2 + 1) * buffer_bytes;   /* Second buffer for this channel */
+        
         unix_infos[i].is_input = bufferInfos[i].isInput;
         unix_infos[i].channel_num = bufferInfos[i].channelNum;
+        
+        /* Set buffer pointers from PE-allocated memory */
+        unix_infos[i].buffer_ptr[0] = (UINT64)(UINT_PTR)(base + offset0);
+        unix_infos[i].buffer_ptr[1] = (UINT64)(UINT_PTR)(base + offset1);
+        
+        DBG_STDERR("      Channel %d: PE buffers[0]=%p, buffers[1]=%p",
+                   i, (void*)(base + offset0), (void*)(base + offset1));
     }
     
     DBG_STDERR("    CreateBuffers step 5: preparing UNIX_CALL params");
@@ -875,17 +937,29 @@ LONG STDMETHODCALLTYPE CreateBuffers(LPWINEASIO iface, ASIOBufferInfo *bufferInf
     UNIX_CALL(asio_create_buffers, &params);
     DBG_STDERR("    CreateBuffers step 7: UNIX_CALL returned, result=%d", (int)params.result);
     
-    /* Copy buffer pointers back */
+    /* Copy buffer pointers back to ASIO bufferInfos structure */
     if (params.result == ASE_OK) {
+        DBG_STDERR("    CreateBuffers step 8: copying PE-allocated buffer pointers to ASIO struct");
         for (i = 0; i < numChannels; i++) {
+            /* Use the PE-side allocated pointers we set earlier */
             bufferInfos[i].buffers[0] = (void *)(UINT_PTR)unix_infos[i].buffer_ptr[0];
             bufferInfos[i].buffers[1] = (void *)(UINT_PTR)unix_infos[i].buffer_ptr[1];
+            DBG_STDERR("      Channel %d: isInput=%d, buffers[0]=%p, buffers[1]=%p",
+                       (int)i, bufferInfos[i].isInput, bufferInfos[i].buffers[0], bufferInfos[i].buffers[1]);
+        }
+        DBG_STDERR("    CreateBuffers step 8 done: all %d buffer pointers set (PE-side allocated)", (int)numChannels);
+    } else {
+        /* Failed - free PE buffers */
+        if (This->pe_audio_buffers) {
+            HeapFree(GetProcessHeap(), 0, This->pe_audio_buffers);
+            This->pe_audio_buffers = NULL;
         }
     }
     
     HeapFree(GetProcessHeap(), 0, unix_infos);
     
     DBG_STDERR("<<< CreateBuffers returning %ld (ASE_OK=%d)", (long)params.result, ASE_OK);
+    DBG_STDERR("    About to return to caller (REAPER) - if crash follows, it's in REAPER's code");
     return params.result;
 }
 
