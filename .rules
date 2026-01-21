@@ -1,0 +1,288 @@
+# WineASIO Project Rules
+# ======================
+# Project: WineASIO v1.4.1 - ASIO to JACK bridge for Wine
+# Location: /home/gng/docker-workspace/wineasio-fork
+# Last Updated: 2026-01-21
+
+## ⚠️ CRITICAL WARNINGS FOR AI ASSISTANT ⚠️
+
+### NEVER DELETE ~/.wine PREFIX!
+The default Wine prefix at `~/.wine` contains ALL installed Windows applications
+(FL Studio, REAPER, Vienna Instruments, etc.) and licenses. NEVER run:
+- `rm -rf ~/.wine`
+- `wineboot -i` without WINEPREFIX set
+- Any command that would destroy the default prefix
+
+### Use Testing Prefixes Instead
+For testing, always use a separate prefix:
+```bash
+export WINEPREFIX=~/wine-test
+# Then run wine commands
+```
+
+### Test Prefixes Available
+- `~/wine-test` - General testing
+- `~/wine-test-winestable` - wine-stable testing
+
+## Project Overview
+
+WineASIO is an ASIO driver for Wine that bridges Windows ASIO audio applications to the Linux JACK audio system. This fork has been updated for Wine 11 compatibility with the new PE/Unix split architecture.
+
+### Key Facts
+- **Current Version**: v1.4.1 (released 2026-01-20)
+- **GitHub**: https://github.com/giang17/wineasio
+- **Wine Support**: Wine 11.x (new WoW64), Wine 10.x (old WoW64), wine-stable
+- **Architecture**: 32-bit and 64-bit support
+- **WineHQ Bug**: #59283 (was misdiagnosed - see notes below)
+
+## Directory Structure
+
+```
+wineasio-fork/
+├── asio.c              # Core ASIO implementation (shared)
+├── asio_pe.c           # Windows PE side (COM interface, vtable)
+├── asio_unix.c         # Unix side (JACK communication)
+├── jackbridge.c/h      # JACK API bridge
+├── main.c              # DLL entry point
+├── regsvr.c            # COM registration
+├── unixlib.h           # PE/Unix interface definitions
+├── Makefile.wine11     # Build system for Wine 11
+├── Makefile            # Legacy build (Wine <10.2)
+├── build_wine11/       # Build output directory
+├── test_asio_minimal.c # Minimal 32-bit test host
+├── test_asio_minimal.exe # Compiled test executable
+└── docs/
+    ├── WINE11_PORTING.md
+    ├── TEST-RESULTS.md
+    ├── DEVELOPMENT.md
+    └── RELEASE_NOTES.md
+```
+
+## Wine Installations on This System
+
+| Wine Version | Path | Usage |
+|--------------|------|-------|
+| wine-11.0 (custom build) | `/usr/local/bin/wine` | Primary development |
+| wine-stable 11.0 | `/opt/wine-stable/bin/wine` | Testing old WoW64 |
+
+### WineASIO Installation Locations
+
+**Custom Wine 11 (/usr/local):**
+- `/usr/local/lib/wine/i386-windows/wineasio.dll` (32-bit PE)
+- `/usr/local/lib/wine/x86_64-windows/wineasio64.dll` (64-bit PE)
+- `/usr/local/lib/wine/x86_64-unix/wineasio.so` (64-bit Unix)
+- `/usr/local/lib/wine/x86_64-unix/wineasio64.so` (64-bit Unix)
+
+**Wine-stable (/opt/wine-stable):**
+- `/opt/wine-stable/lib/wine/i386-windows/wineasio.dll`
+- `/opt/wine-stable/lib/wine/i386-unix/wineasio.so` (32-bit Unix)
+- `/opt/wine-stable/lib/wine/x86_64-windows/wineasio64.dll`
+- `/opt/wine-stable/lib/wine/x86_64-unix/wineasio64.so`
+
+## Build Commands
+
+### Wine 11 Build (PE/Unix split)
+```bash
+cd /home/gng/docker-workspace/wineasio-fork
+
+# Build 64-bit only
+make -f Makefile.wine11 64
+
+# Build 32-bit only (requires multilib)
+make -f Makefile.wine11 32
+
+# Build both
+make -f Makefile.wine11 all
+
+# Install (requires sudo)
+sudo make -f Makefile.wine11 install
+
+# Clean
+make -f Makefile.wine11 clean
+```
+
+### Register WineASIO in Wine Prefix
+```bash
+# 64-bit registration
+wine64 regsvr32 wineasio64.dll
+
+# 32-bit registration
+wine regsvr32 wineasio.dll
+```
+
+## Testing
+
+### Minimal Test Host (32-bit diagnostic)
+```bash
+# Compile (if needed)
+i686-w64-mingw32-gcc -o test_asio_minimal.exe test_asio_minimal.c -lole32 -luuid
+
+# Run with debug output
+WINEDEBUG=warn+wineasio wine test_asio_minimal.exe
+```
+
+### Test with Real Applications
+```bash
+# 64-bit REAPER (works)
+wine "$HOME/.wine/drive_c/Program Files/REAPER (x64)/reaper.exe"
+
+# 32-bit REAPER (has issues - see Known Issues)
+wine "$HOME/.wine/drive_c/Program Files (x86)/REAPER/reaper.exe"
+
+# FL Studio (64-bit, works)
+wine "$HOME/.wine/drive_c/Program Files/Image-Line/FL Studio 2024/FL64.exe"
+```
+
+### Debug Output
+```bash
+# WineASIO specific
+WINEDEBUG=+wineasio wine application.exe
+
+# Full debug (very verbose)
+WINEDEBUG=+all wine application.exe 2>&1 | tee debug.log
+
+# Relay tracing (function calls)
+WINEDEBUG=+relay wine application.exe
+```
+
+## Known Issues & Status
+
+### ✅ Working
+- 64-bit WineASIO with Wine 11 (all apps)
+- 64-bit REAPER, FL Studio, Bitwig
+- Minimal 32-bit test host passes all tests
+
+### ⚠️ Partially Working / Under Investigation
+- **32-bit apps + WineASIO**: Crash when WineASIO is selected as audio driver
+  - CFX Lite 32-bit: runs fine until WineASIO selected → crash
+  - FL Studio ASIO: works (different ASIO implementation?)
+  - Cause: NOT a Wine bug, likely WineASIO 32-bit CreateBuffers/Start/Callback issue
+
+### ❌ Known Issues
+- Berkeley DB errors from JACK (`BDB1539 Build signature doesn't match`) - cosmetic, from libjack, not Wine
+- 32-bit WineASIO crashes in real hosts (needs further debugging)
+
+### WineHQ Bug #59283 - CLOSED/INVALID
+Original report blamed Wine/GTK/BDB - this was INCORRECT.
+- BDB errors come from libjack (JACK metadata in /dev/shm/jack_db-1000/)
+- Actual crash is WineASIO-specific when 32-bit hosts select WineASIO
+- mata (WineHQ) correctly identified the misdiagnosis
+
+## Wine Prefixes
+
+| Prefix | Purpose |
+|--------|---------|
+| `~/.wine` | Main prefix with all apps |
+| `~/wine-test-winestable` | Testing with wine-stable |
+| `~/wine-test` | Clean testing prefix |
+
+## Installed Windows Applications (in ~/.wine)
+
+### 64-bit (Program Files)
+- REAPER (x64)
+- FL Studio 2024
+- Vienna Instruments Pro
+- Vienna Synchron Player
+- UVI Workstation x64
+- KORG plugins
+
+### 32-bit (Program Files (x86))
+- REAPER (32-bit)
+- Garritan CFX Lite
+- Applied Acoustics Systems
+
+## Next Steps (TODO) - Updated 2026-01-21
+
+### Session Summary: 32-bit WoW64 Crash Investigation
+
+**Key Discovery**: The crash occurs BEFORE DllMain is called!
+- Crash signature: `page fault on execute access to 0x00000000`
+- None of our debug instrumentation (DBG_STDERR, EARLY_DBG) ever prints
+- Problem is in PE loader/CRT initialization, NOT in WineASIO code
+
+**What We Ruled Out**:
+1. ✅ "Wine builtin DLL" marker - removed it, crash persists
+2. ✅ TLS callbacks - callback array is already NULL (no callbacks)
+3. ✅ Wine's unix call dispatcher - crash before any WineASIO code runs
+4. ✅ OLE32/OLEAUT32 imports - crash happens without them too
+
+**What We Found**:
+- A **super minimal DLL** (just DllMain + 4 exports, no COM) WORKS
+- Adding HeapAlloc/HeapFree imports causes crash
+- Adding COM class factory (IsEqualGUID, vtables) causes crash
+- The crash is related to **DLL complexity/size**, not specific code
+
+**Current Theory**:
+The Wine WoW64 PE loader has issues with certain DLL characteristics
+when loading 32-bit DLLs in WoW64 mode. Possible causes:
+- Relocation table handling
+- Import table processing for certain functions
+- Memory layout conflicts with specific DLL base addresses
+
+### Priority TODOs for Next Session
+
+1. **Test in separate wine prefix** (NOT ~/.wine!)
+   ```bash
+   export WINEPREFIX=~/wine-test
+   WINEARCH=win64 wineboot -i
+   # Copy test DLLs to syswow64 and test
+   ```
+
+2. **Binary comparison**: Compare working minimal DLL vs crashing one
+   - Check relocation tables
+   - Check section layouts
+   - Check PE header differences
+
+3. **Try different linker flags**:
+   ```bash
+   # Test without relocation
+   -Wl,--disable-reloc-section
+   # Test with different base address
+   -Wl,--image-base,0x10000000
+   # Test without any CRT
+   -nostartfiles -nostdlib
+   ```
+
+4. **Create minimal reproducer for Wine developers**
+   - Smallest DLL that crashes
+   - Smallest DLL that works
+   - Document the exact difference
+
+5. **Test with real wine-stable (not custom build)**
+   ```bash
+   /opt/wine-stable/bin/wine ...
+   ```
+
+### Test Files Created This Session
+Located in `/tmp/`:
+- `minimal_wineasio.dll` - Works (83KB, 4 exports)
+- `minimal_step1.dll` - Crashes (86KB, HeapAlloc added)
+- `minimal_full.dll` - Crashes (319KB, full COM)
+- `minimal_noadvapi.dll` - Crashes (309KB, no registry)
+- `minimal_def.dll` - Crashes (275KB, DEF file exports)
+
+### Potential Issues to Investigate
+- Callback calling convention (32-bit stdcall vs 64-bit)
+- Buffer pointer handling across PE/Unix boundary
+- ASIOTime structure alignment in 32-bit
+- **NEW**: PE loader issues with DLL complexity in WoW64
+
+## Useful References
+
+- Wine 11 PE/Unix split: https://wiki.winehq.org/Dll_Separation
+- ASIO SDK: Steinberg (requires registration)
+- JACK API: https://jackaudio.org/api/
+- WineASIO upstream: https://github.com/wineasio/wineasio
+
+## Notes for AI Assistant
+
+1. **This is NOT a Docker project** - runs directly on host system
+2. **Requires JACK running** - start with `jackd` or via PipeWire-JACK
+3. **Needs multilib for 32-bit** - `gcc-multilib`, `libc6-dev-i386`
+4. **Wine headers required** - from Wine source or wine-dev packages
+5. **Test carefully** - 32-bit crashes can be hard to debug
+6. **BDB errors are harmless** - come from libjack, not our code
+7. **⚠️ NEVER delete ~/.wine** - contains all installed apps and licenses!
+8. **Use ~/wine-test for testing** - set WINEPREFIX before any wine commands
+9. **32-bit crash is pre-DllMain** - problem in PE loader, not our code
+10. **Logs saved in** `docker-workspace/logs/` - backtrace files from crash sessions
