@@ -2,7 +2,7 @@
 # ======================
 # Project: WineASIO v1.4.2 - ASIO to JACK bridge for Wine
 # Location: /home/gng/docker-workspace/wineasio-fork
-# Last Updated: 2026-01-21
+# Last Updated: 2026-01-21 19:01
 
 ## ⚠️ CRITICAL WARNINGS FOR AI ASSISTANT ⚠️
 
@@ -178,16 +178,17 @@ WINEDEBUG=+relay wine application.exe
 ### ✅ Working
 - 64-bit WineASIO with Wine 11 (all apps)
 - 64-bit REAPER, FL Studio, Bitwig
-- **32-bit WineASIO with Wine 11 WoW64 - FULLY FIXED!**
-- All ASIO methods work correctly with proper thiscall convention
+- 32-bit WineASIO DLL loads correctly with `--builtin` flag
+- test_asio_thiscall.exe passes all tests
 
-### ⚠️ Notes
-- Berkeley DB errors from JACK (`BDB1539 Build signature doesn't match`) - cosmetic, from libjack, not Wine
-- Test programs MUST use thiscall calling convention (see test_asio_thiscall.c)
+### ⚠️ Partially Working (32-bit)
+- REAPER 32-bit loads WineASIO, CreateBuffers succeeds
+- BUT: No audio output - Start() not called or fails silently
+- Crash on second REAPER start with WineASIO settings saved
 
-### ❌ Previous Issues - NOW FIXED
-- ~~32-bit WineASIO crashes~~ → Fixed by re-enabling `--builtin` flag
-- ~~c0000135 STATUS_DLL_NOT_FOUND~~ → Fixed by marking DLL as Wine builtin
+### ❌ Previous Issues - FIXED
+- ~~c0000135 STATUS_DLL_NOT_FOUND~~ → Fixed by re-enabling `--builtin` flag
+- ~~Test program crashes~~ → Fixed by using correct thiscall convention
 
 ### WineHQ Bug #59283 - CLOSED/INVALID
 Original report blamed Wine/GTK/BDB - this was INCORRECT.
@@ -220,39 +221,43 @@ Original report blamed Wine/GTK/BDB - this was INCORRECT.
 
 ## Solution Summary - 2026-01-21
 
-### 32-bit WoW64 Issue: ✅ FULLY FIXED!
+### 32-bit WoW64 Issue: ⚠️ PARTIALLY FIXED
 
-**Root Cause Found**: The crash was NOT in Wine or WineASIO code!
-- The test program `test_asio_minimal.exe` used **stdcall** calling convention
-- ASIO on 32-bit Windows requires **thiscall** (this pointer in ECX register)
-- Calling convention mismatch caused crashes
-- The `--builtin` flag was incorrectly blamed
+**What's Fixed**:
+- Unix-side loading works with `--builtin` flag
+- test_asio_thiscall.exe passes all tests
+- REAPER 32-bit loads WineASIO, CreateBuffers succeeds
+
+**What's Still Broken**:
+- No audio output in REAPER - Start() not called or fails
+- Crash on second REAPER start with WineASIO settings saved
+
+**Root Cause of Original Crash**: Test program used wrong calling convention (stdcall vs thiscall)
 
 **Solution Applied**:
 1. **Re-enabled `--builtin` flag** in Makefile.wine11 (REQUIRED for Unix side loading)
 2. **Created `test_asio_thiscall.c`** with correct calling convention
-3. **Kept linker flags** for WoW64 compatibility:
-   - `--image-base=0x10000000`
-   - `--disable-reloc-section`
+3. **Kept linker flags** for WoW64 compatibility
 
-**Key Insight**: Real ASIO hosts (REAPER, Cubase, FL Studio) use thiscall correctly, so they work! Only our test program was wrong.
-
-### Build Configuration (Working)
-```makefile
-# 32-bit with --builtin ENABLED (required!)
-$(BUILD_DIR)/$(DLL32): ...
-    $(MINGW32) ... $(PE_LDFLAGS_32) ...
-    $(WINEBUILD) --builtin $@   # <-- REQUIRED!
+### Debug Log Evidence (2026-01-21 19:01)
+```
+[WineASIO-DBG] init_wine_unix_call: SUCCESS - unix handle = 0x708a7f8e3cc0
+[WineASIO-DBG] >>> CreateBuffers(numChannels=18, bufferSize=128, callbacks=00f977cc)
+# No Start() call visible - app exits!
 ```
 
-### Test Files
-- `test_asio_thiscall.c` - Correct thiscall convention ✅
-- `test_asio_minimal.c` - Wrong stdcall convention ❌ (kept for reference)
+### Next Session TODOs
+1. **Debug why Start() is not called after CreateBuffers**
+   - Add debug output to Start(), Stop(), GetSampleRate(), CanSampleRate()
+   - Check CreateBuffers return value
+   - Verify JACK client is created
+2. **Fix crash on second REAPER start**
+   - Test in clean wine-test prefix
+   - Reset REAPER audio settings before testing
+3. **Test with other 32-bit hosts** (Garritan CFX Lite)
 
-### Next Steps
-1. Test with real ASIO hosts (REAPER 32-bit)
-2. Prepare v1.4.2 release with 32-bit fix
-3. Update release notes
+### Log Files
+- `~/docker-workspace/logs/reaper32_wineasio_20260121_190132.log`
 
 ## Useful References
 
@@ -271,5 +276,7 @@ $(BUILD_DIR)/$(DLL32): ...
 6. **BDB errors are harmless** - come from libjack, not our code
 7. **⚠️ NEVER delete ~/.wine** - contains all installed apps and licenses!
 8. **Use ~/wine-test for testing** - set WINEPREFIX before any wine commands
-9. **32-bit is FIXED** - use `--builtin` flag and thiscall calling convention
+9. **32-bit DLL loading is FIXED** - use `--builtin` flag and thiscall calling convention
 10. **Test with test_asio_thiscall.exe** - NOT test_asio_minimal.exe (wrong calling convention)
+11. **32-bit audio not working yet** - CreateBuffers OK but Start() not called/fails
+12. **Logs saved in** `docker-workspace/logs/` - debug sessions from REAPER tests
