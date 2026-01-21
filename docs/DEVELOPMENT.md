@@ -4,6 +4,8 @@
 
 This document provides technical information for developers working on WineASIO, particularly regarding the Wine 11 port and 32-bit support.
 
+**Last Updated:** 2026-01-21 (v1.4.2)
+
 ---
 
 ## Building WineASIO
@@ -49,14 +51,56 @@ sudo make install
 ### Build Output
 
 Wine 11 builds create:
-- `build_wine11/wineasio.dll` (32-bit PE) or `wineasio64.dll` (64-bit PE)
-- `build_wine11/wineasio.so` (32-bit Unix) or `wineasio64.so` (64-bit Unix)
+- `build_wine11/wineasio.dll` (32-bit PE)
+- `build_wine11/wineasio.so` (64-bit Unix for 32-bit PE!)
+- `build_wine11/wineasio64.dll` (64-bit PE)
+- `build_wine11/wineasio64.so` (64-bit Unix)
 
 Files are marked as Wine builtins with `winebuild --builtin`.
 
 ---
 
-## Wine 11 Architecture
+## Wine 11 WoW64 Architecture
+
+### Critical Discovery (v1.4.2)
+
+**In Wine 11 WoW64, 32-bit PE DLLs use 64-bit Unix libraries!**
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│ 32-bit PE DLL (wineasio.dll)                                │
+│   - Runs in emulated 32-bit address space                   │
+│   - Addresses: 0x00000000 - 0x7FFFFFFF                      │
+└─────────────────────┬───────────────────────────────────────┘
+                      │ __wine_unix_call() with WoW64 thunking
+                      ▼
+┌─────────────────────────────────────────────────────────────┐
+│ 64-bit Unix .so (wineasio.so in x86_64-unix/)               │
+│   - Runs in native 64-bit address space                     │
+│   - MUST be built with -m64, NOT -m32!                      │
+│   - Installed to x86_64-unix/, NOT i386-unix/               │
+└─────────────────────────────────────────────────────────────┘
+```
+
+### Build Flags Summary
+
+| Component | Build Flag | Install Location |
+|-----------|-----------|------------------|
+| `wineasio.dll` (32-bit PE) | `-m32` | `i386-windows/` |
+| `wineasio.so` (for 32-bit PE) | **`-m64`** | **`x86_64-unix/`** |
+| `wineasio64.dll` (64-bit PE) | `-m64` | `x86_64-windows/` |
+| `wineasio64.so` (for 64-bit PE) | `-m64` | `x86_64-unix/` |
+
+**Note:** There is NO `i386-unix/` directory in Wine 11 WoW64 builds!
+
+### Address Space Implications
+
+PE (32-bit) and Unix (64-bit) have DIFFERENT address spaces:
+- A 32-bit pointer (0x00F85760) is INVALID in 64-bit Unix space
+- A 64-bit pointer (0x7fd15ad29cc0) does NOT fit in 32-bit
+- **Audio buffers MUST be allocated on PE side** to be accessible by Windows apps
+
+For detailed architecture information, see `docs/WINE11_WOW64_ARCHITECTURE.md`.
 
 ### PE/Unix Split
 
@@ -66,94 +110,73 @@ Wine 11 introduced a new architecture separating Windows (PE) and Unix code:
 - `asio_pe.c` - COM interface, vtable, Windows API
 - Compiled with MinGW to native Windows DLL
 - Handles ASIO host communication
+- Allocates audio buffers (important for WoW64!)
 - Calls Unix side via `__wine_unix_call`
 
 **Unix Side (Linux):**
 - `asio_unix.c` - JACK integration, audio processing
-- Compiled with GCC to ELF shared library
+- Compiled with GCC to ELF shared library (always 64-bit in WoW64!)
 - Loaded by Wine's Unix loader
 - Receives calls from PE side via dispatch table
+- Uses PE-allocated buffers for audio
 
 **Interface:**
 - `unixlib.h` - Defines function enum and parameter structs
 - Functions enumerated: `asio_init`, `asio_start`, `asio_get_channels`, etc.
 - Parameters passed as structs between PE and Unix
 
-### Why This Architecture?
-
-1. **Security**: PE code runs in restricted environment
-2. **Stability**: Unix code crashes don't affect Wine process
-3. **Performance**: Direct syscalls from Unix side
-4. **Compatibility**: Native PE matches Windows behavior
-
-For detailed technical information, see `WINE11_PORTING.md`.
-
 ---
 
 ## 32-bit Support Status
 
-### Current Status: ✅ WORKING
+### Current Status: ✅ FULLY WORKING (v1.4.2)
 
-As of 2026-01-20, WineASIO 32-bit support for Wine 11 is **complete and functional**.
+As of 2026-01-21, WineASIO 32-bit support for Wine 11 is **complete and functional**.
 
-### Testing Results
+### Tested Applications
 
-**Minimal Test Program (`test_asio_minimal.exe`):**
-- ✅ COM interface works
-- ✅ Init() succeeds
-- ✅ GetChannels() returns correct values
-- ✅ No NULL pointer crashes
-- ✅ Clean shutdown
-
-**Real-world Applications:**
-- ⚠️ Some apps (REAPER, CFX Lite) crash with Berkeley DB errors
-- This is a Wine/libdb compatibility issue, **NOT a WineASIO bug**
-- WineASIO functions correctly when called
-
-### Known Issues
-
-**Berkeley DB Crashes:**
-```
-BDB1539 Build signature doesn't match environment
-Cannot open DB environment: BDB0091 DB_VERSION_MISMATCH
-```
-
-**Workaround:**
-- Use 64-bit applications when possible
-- Remove `.db` files from Wine prefix
-- Update system libdb to match Wine's version
-
-See `TEST-RESULTS.md` for detailed analysis.
+| Application | Architecture | Status |
+|-------------|--------------|--------|
+| REAPER 32-bit | 32-bit PE | ✅ Working |
+| REAPER 64-bit | 64-bit PE | ✅ Working |
+| Garritan CFX Lite | 32-bit PE | ✅ Working |
+| FL Studio 2025 | 64-bit PE | ✅ Working |
+| test_asio_interactive.exe | 32-bit PE | ✅ Working |
 
 ---
 
 ## Testing
 
-### Quick Test
+### Test Programs
+
+Test programs are located in the `tests/` directory:
+
+- `test_asio_minimal.c` - Basic ASIO functionality test
+- `test_asio_interactive.c` - Keeps JACK connection open for inspection
+- `test_asio_start.c` - Full ASIO pipeline test
+- `test_asio_thiscall.c` - Thiscall convention verification
+- `test_asio_extended.c` - Extended API testing
+
+### Building Test Programs
 
 ```bash
-# Test WineASIO directly
-cd wineasio-fork
-i686-w64-mingw32-gcc -o test_asio_minimal.exe test_asio_minimal.c -lole32 -luuid
-WINEDEBUG=warn+wineasio wine test_asio_minimal.exe
-```
+# Build 32-bit test
+i686-w64-mingw32-gcc -o tests/test_asio_interactive.exe tests/test_asio_interactive.c -lole32 -luuid
 
-Expected output:
-- WineASIO instance created
-- Init() succeeds
-- GetChannels() returns 16/16
-- No crashes
+# Run test
+WINEDEBUG=-all wine tests/test_asio_interactive.exe
+```
 
 ### Testing with DAWs
 
-**64-bit (recommended):**
+**64-bit:**
 ```bash
-WINEDEBUG=warn+wineasio wine64 /path/to/app64.exe
+wine "$HOME/.wine/drive_c/Program Files/REAPER (x64)/reaper.exe"
 ```
 
 **32-bit:**
 ```bash
-WINEDEBUG=warn+wineasio wine /path/to/app32.exe
+wine "$HOME/.wine/drive_c/Program Files (x86)/REAPER/reaper.exe"
 ```
 
 ### Debug Output
@@ -162,8 +185,24 @@ Enable WineASIO traces:
 ```bash
 WINEDEBUG=+wineasio wine app.exe          # All traces
 WINEDEBUG=warn+wineasio wine app.exe      # Warnings only
-WINEDEBUG=+all wine app.exe 2>&1 | less   # Everything
+WINEDEBUG=-all wine app.exe               # Suppress Wine debug output
 ```
+
+### Verification
+
+When correctly configured, you should see Unix-side debug output:
+```
+[WineASIO-Unix] *** Library loaded (constructor called) ***
+[WineASIO-Unix] >>> asio_init() called
+```
+
+And PE buffer usage in JACK callback:
+```
+wineasio:trace: Copying input 0, pe_buffer[0]=0x1355cc0
+wineasio:trace: Copying output 0, pe_buffer[0]=0x13564c0
+```
+
+If you see `audio_buffer=(nil)` warnings, the fix is not installed correctly.
 
 ---
 
@@ -175,19 +214,20 @@ WINEDEBUG=+all wine app.exe 2>&1 | less   # Everything
 - `asio_pe.c` - PE (Windows) side implementation
 - `asio_unix.c` - Unix (Linux) side implementation
 - `unixlib.h` - PE↔Unix interface definitions
-- `asio.h` - ASIO SDK interface (from Steinberg)
 
 **Build:**
 - `Makefile.wine11` - Wine 11+ build system
 - `Makefile` - Legacy (Wine 6-10) build system
 - `wineasio.def` - PE DLL export definitions
-- `ntdll_wine32.def` / `ntdll_wine64.def` - Import libraries
 
 **Documentation:**
 - `README.md` - User documentation
-- `WINE11_PORTING.md` - Technical porting details
-- `RELEASE_NOTES.md` - Version history
-- `TEST-RESULTS.md` - 32-bit testing analysis
+- `docs/WINE11_PORTING.md` - Technical porting details
+- `docs/WINE11_WOW64_ARCHITECTURE.md` - WoW64 architecture
+- `docs/WINE11_WOW64_32BIT_SOLUTION.md` - 32-bit fix explanation
+
+**Tests:**
+- `tests/test_asio_*.c` - Test programs
 
 ### PE Side Functions
 
@@ -196,7 +236,7 @@ Main ASIO interface functions (in `asio_pe.c`):
 - `Start()` / `Stop()` - Start/stop audio processing
 - `GetChannels()` - Query input/output channel count
 - `GetBufferSize()` - Query buffer size constraints
-- `CreateBuffers()` - Allocate audio buffers
+- `CreateBuffers()` - Allocate audio buffers (on PE side!)
 - `DisposeBuffers()` - Free audio buffers
 
 COM infrastructure:
@@ -210,8 +250,8 @@ JACK integration (in `asio_unix.c`):
 - `asio_init()` - Connect to JACK, create ports
 - `asio_start()` / `asio_stop()` - Activate/deactivate JACK client
 - `asio_get_channels()` - Return configured channel count
-- `asio_create_buffers()` - Register JACK ports
-- `jack_process_callback()` - Audio processing callback
+- `asio_create_buffers()` - Register JACK ports, receive PE buffer pointers
+- `jack_process_callback()` - Audio processing callback (uses `pe_buffer[]`)
 
 ---
 
@@ -293,20 +333,18 @@ make -f Makefile.wine11 32 64
 
 ### Common Issues
 
-**"Cannot find wineasio.so":**
-- Check installation path matches Wine's library directory
-- For Wine 11: Use `NtQueryVirtualMemory` to find Unix library
+**"Cannot find wineasio.so" or no Unix debug output:**
+- Check that `wineasio.so` is in `x86_64-unix/` (NOT `i386-unix/`)
+- Verify it's 64-bit: `file /path/to/wine/x86_64-unix/wineasio.so`
 - Ensure `winebuild --builtin` was run
 
 **"Class not registered":**
 - Run `wine regsvr32 wineasio.dll` (32-bit)
-- Or `wine64 regsvr32 wineasio.dll` (64-bit)
 - Check registry: `wine regedit` → HKEY_CLASSES_ROOT\CLSID\{48D0C522-...}
 
-**Crashes in real apps but test works:**
-- Not a WineASIO bug (see TEST-RESULTS.md)
-- Check for libdb, GTK+, or other library conflicts
-- Try different Wine version or application
+**No audio but JACK ports visible:**
+- Check for `audio_buffer=(nil)` warnings - old code still using Unix-side buffers
+- Rebuild and reinstall with latest code
 
 ### GDB Debugging
 
@@ -339,6 +377,7 @@ See `CONTRIBUTING.md` for:
 
 - **ASIO SDK**: https://www.steinberg.net/developers/
 - **Wine Documentation**: https://wiki.winehq.org/
+- **Wine PE/Unix Split**: https://wiki.winehq.org/Dll_Separation
 - **JACK Audio**: https://jackaudio.org/
 - **Original WineASIO**: https://github.com/wineasio/wineasio
 

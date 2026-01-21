@@ -352,12 +352,14 @@ Cannot open DB environment: BDB0091 DB_VERSION_MISMATCH
    rm -rf ~/.wine/.local/share/recently-used.xbel*
    find ~/.wine -name "*.db" -delete
    ```
-3. **Test WineASIO separately:** Use the included `test_asio_minimal.exe` to verify WineASIO works:
+3. **Test WineASIO separately:** Use the included test programs to verify WineASIO works:
    ```sh
-   wine test_asio_minimal.exe
+   # Build test program
+   i686-w64-mingw32-gcc -o tests/test_asio_minimal.exe tests/test_asio_minimal.c -lole32 -luuid
+   wine tests/test_asio_minimal.exe
    ```
 
-**Note:** WineASIO 32-bit itself works correctly. See `TEST-RESULTS.md` for detailed analysis.
+**Note:** WineASIO 32-bit is fully working as of v1.4.2. See `docs/WINE11_WOW64_32BIT_SOLUTION.md` for details.
 
 ---
 
@@ -403,9 +405,12 @@ wineasio/
 │   ├── settings.py     # Main settings GUI
 │   └── ui_settings.py  # UI definitions
 ├── docs/               # Documentation
+│   ├── DEVELOPMENT.md              # Developer guide
+│   ├── WINE11_PORTING.md           # Wine 11 porting details
 │   ├── WINE11_WOW64_ARCHITECTURE.md
 │   └── WINE11_WOW64_32BIT_SOLUTION.md
-├── test_asio_*.c       # Test programs
+├── tests/              # Test programs
+│   └── test_asio_*.c
 └── docker/             # Docker build environment
 ```
 
@@ -418,7 +423,7 @@ wineasio/
 * **FIX:** Audio buffers allocated on PE side for WoW64 address space compatibility
 * **FIX:** JACK callback uses PE-allocated buffers
 * **NEW:** Comprehensive WoW64 architecture documentation
-* **NEW:** Test programs for debugging (test_asio_interactive.c, etc.)
+* **NEW:** Test programs for debugging (in `tests/` directory)
 * Tested with REAPER 32-bit, Garritan CFX Lite, FL Studio
 
 ### 1.4.0 (Wine 11 Port) - January 2026

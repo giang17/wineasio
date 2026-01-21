@@ -2,6 +2,10 @@
 
 This document describes the technical changes required to port WineASIO from the legacy Wine architecture to Wine 11's new PE/Unix split architecture.
 
+**Last Updated:** 2026-01-21 (v1.4.2)
+
+> **Important:** See also `WINE11_WOW64_ARCHITECTURE.md` and `WINE11_WOW64_32BIT_SOLUTION.md` for the critical WoW64 architecture discovery.
+
 ## Background
 
 ### Wine's New DLL Architecture (Wine 10.2+/11)
@@ -258,19 +262,29 @@ Note: 32-bit uses `wineasio` (not `wineasio32`) to match Wine's internal expecta
 
 ## Installation Paths
 
-Wine 11 uses separate directories for PE and Unix libraries:
+Wine 11 WoW64 uses separate directories for PE and Unix libraries.
+
+**⚠️ CRITICAL:** In Wine 11 WoW64, there is NO `i386-unix/` directory! 32-bit PE DLLs use 64-bit Unix libraries!
 
 ```
 /opt/wine-stable/lib/wine/
 ├── x86_64-windows/     # 64-bit PE DLLs
 │   └── wineasio64.dll
-├── x86_64-unix/        # 64-bit Unix SOs
-│   └── wineasio64.so
-├── i386-windows/       # 32-bit PE DLLs
-│   └── wineasio.dll
-└── i386-unix/          # 32-bit Unix SOs
-    └── wineasio.so
+├── x86_64-unix/        # ALL Unix SOs (both 32-bit and 64-bit PE!)
+│   ├── wineasio64.so   # For 64-bit PE
+│   └── wineasio.so     # For 32-bit PE (but this is a 64-bit binary!)
+└── i386-windows/       # 32-bit PE DLLs
+    └── wineasio.dll
 ```
+
+### WoW64 Architecture Summary
+
+| Component | Build Flag | Install Location |
+|-----------|-----------|------------------|
+| `wineasio.dll` (32-bit PE) | `-m32` | `i386-windows/` |
+| `wineasio.so` (for 32-bit PE) | **`-m64`** | **`x86_64-unix/`** |
+| `wineasio64.dll` (64-bit PE) | `-m64` | `x86_64-windows/` |
+| `wineasio64.so` (for 64-bit PE) | `-m64` | `x86_64-unix/` |
 
 ## Debugging
 
