@@ -24,6 +24,34 @@ export WINEPREFIX=~/wine-test
 - `~/wine-test` - General testing
 - `~/wine-test-winestable` - wine-stable testing
 
+### DO NOT WORK ON MASTER BRANCH!
+Always create or switch to a feature branch for development work.
+The `master` branch should only receive merged, tested code.
+
+## Git Branch Structure
+
+| Branch | Purpose | Status |
+|--------|---------|--------|
+| `master` | Stable releases only | ⚠️ Do not work here directly |
+| `wine11-support` | Wine 11 PE/Unix split support | Released as v1.4.0 |
+| `wine11-32bit-test` | 32-bit testing work | Development |
+| `wine11-32bit-crash-debug` | Current crash debugging | **Active development** |
+| `wine11-custom-build-32bit` | Custom Wine build tests | Development |
+
+### Branch Workflow
+```bash
+# Check current branch
+git branch
+
+# Switch to development branch
+git checkout wine11-32bit-crash-debug
+
+# Create new feature branch from current
+git checkout -b my-new-feature
+
+# Never commit directly to master!
+```
+
 ## Project Overview
 
 WineASIO is an ASIO driver for Wine that bridges Windows ASIO audio applications to the Linux JACK audio system. This fork has been updated for Wine 11 compatibility with the new PE/Unix split architecture.
