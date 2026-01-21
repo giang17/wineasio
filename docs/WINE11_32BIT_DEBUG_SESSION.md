@@ -3,8 +3,8 @@
 ## Session Overview
 This document records the debugging session for Wine 11 WoW64 32-bit DLL loading issues with WineASIO.
 
-**Date**: 2026-01-21 (Updated: 2026-01-21)  
-**Status**: ✅ FULLY FIXED  
+**Date**: 2026-01-21 (Updated: 2026-01-21 19:01)  
+**Status**: ⚠️ PARTIALLY FIXED - DLL loads, but audio not working yet  
 **Branch**: wine11-32bit-crash-debug  
 
 ## Problem Statement
@@ -86,7 +86,7 @@ Test completed successfully!
 - WineASIO registry keys can be queried and set
 - CLSID lookups work correctly
 
-### ✅ All Tests Now Passing
+### ✅ Test Program Passing
 
 **test_asio_thiscall.exe** - Full success with correct calling convention:
 ```
@@ -99,7 +99,28 @@ WineASIO 32-bit Thiscall Test
 Test completed successfully!
 ```
 
-**Note**: The original test_asio_minimal.exe crashed because it used stdcall instead of thiscall for ASIO methods. Real ASIO hosts (REAPER, Cubase, FL Studio) use thiscall, which is why they work correctly.
+### ⚠️ REAPER 32-bit - Partial Success
+
+**What works:**
+- WineASIO loads and initializes
+- CreateBuffers called successfully (18 channels, buffer size 128)
+- REAPER shows WineASIO in ASIO driver list
+
+**What doesn't work:**
+- No audio output - REAPER reports "audio close"
+- Start() not visible in logs after CreateBuffers
+- Crash on second REAPER start with WineASIO settings saved
+
+**Debug log (2026-01-21 19:01):**
+```
+[WineASIO-DBG] init_wine_unix_call: SUCCESS - unix handle = 0x708a7f8e3cc0
+[WineASIO-DBG] >>> DllGetClassObject called
+[WineASIO-DBG] >>> Init(iface=01744c80, sysRef=000100f0)
+[WineASIO-DBG] >>> CreateBuffers(iface=01744c80, bufferInfos=00f85760, numChannels=18, bufferSize=128, callbacks=00f977cc)
+[WineASIO-DBG]     callbacks->bufferSwitch=0044c9c4
+...
+[WineASIO-DBG] DllMain: hInstDLL=02420000 fdwReason=0  # App exits without Start()
+```
 
 ## Key Insights
 
@@ -170,14 +191,17 @@ LONG call_thiscall_0(void *func, IWineASIO *pThis) {
 
 ## Remaining Issues
 
-### None! 🎉
+### Remaining Issues
 
-All issues have been resolved:
+1. **No audio output** - CreateBuffers succeeds but Start() not called or fails
+2. **Crash on second start** - REAPER crashes when started with WineASIO settings saved
+3. **JACK connection** - Need to verify JACK client is created and connected
+
+### Fixed Issues
 - ✅ PE loader issues fixed with linker flags
 - ✅ Unix side loading fixed by re-enabling `--builtin`
-- ✅ Test crashes fixed by using correct thiscall convention
-
-The previous `c0000135` error was caused by missing `--builtin` flag, which prevented Wine from finding the Unix side (.so file).
+- ✅ Test program crashes fixed by using correct thiscall convention
+- ✅ DLL loads and initializes in REAPER
 
 ## Recommendations
 
@@ -219,12 +243,21 @@ XXXXXXX Re-enable --builtin flag and add thiscall test
 1. ~~Test with --builtin enabled~~ → Works!
 2. ~~Fix test program calling convention~~ → test_asio_thiscall.c created
 3. ~~Re-enable --builtin in Makefile~~ → Done
-4. ~~Verify full functionality~~ → All tests pass
+4. ~~Verify test_asio_thiscall.exe~~ → Passes all tests
+5. ~~Test REAPER 32-bit loading~~ → Loads, CreateBuffers works
 
-### Remaining Tasks
-1. Test with real ASIO hosts (REAPER 32-bit, FL Studio)
-2. Update release notes for v1.4.2
-3. Clean up old test files and documentation
+### Remaining Tasks (Next Session)
+1. **Debug why Start() is not called after CreateBuffers**
+   - Add debug output to Start(), Stop(), GetSampleRate(), CanSampleRate()
+   - Check CreateBuffers return value
+   - Verify callbacks are being triggered
+2. **Debug JACK connection**
+   - Check if JACK client is created
+   - Verify port connections with `jack_lsp -c`
+3. **Fix crash on second REAPER start**
+   - Test in clean wine-test prefix
+   - Identify what saved state causes crash
+4. Test with other 32-bit hosts (Garritan CFX Lite)
 
 ## Session Notes
 
@@ -267,12 +300,22 @@ This shows that **understanding calling conventions** is critical when debugging
 ### ASIO Specification
 - Steinberg ASIO SDK (requires registration)
 
+### Log Files
+- `~/docker-workspace/logs/reaper32_wineasio_20260121_190132.log` - REAPER session with CreateBuffers but no audio
+
 ---
 
-**Session Complete**: ✅ ALL ISSUES FIXED!
+**Session Status**: ⚠️ PARTIALLY COMPLETE
 
+**Fixed:**
 - PE loader issues: Fixed with linker flags
 - Unix side loading: Fixed by re-enabling `--builtin`  
 - Test crashes: Fixed by using correct thiscall convention
+- DLL loads in REAPER: CreateBuffers succeeds
 
-WineASIO 32-bit now fully works with Wine 11 WoW64!
+**Still broken:**
+- No audio output after CreateBuffers
+- Start() not being called or failing silently
+- Crash on second REAPER start with WineASIO settings
+
+**Next session:** Debug the audio pipeline after CreateBuffers
