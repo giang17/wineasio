@@ -36,9 +36,15 @@ PE_CFLAGS += -DWIN32 -D_WIN32
 PE_LDFLAGS = -shared
 PE_LIBS = -lole32 -loleaut32 -luuid -ladvapi32 -lkernel32
 
+# 32-bit specific linker flags for Wine 11 WoW64 compatibility
+# 1. Lower image base to avoid conflicts in WoW64 32-bit address space
+# 2. Disable relocations to work around Wine WoW64 relocation table bugs
+# Note: --builtin flag is now RE-ENABLED because it's required for Unix side loading
+PE_LDFLAGS_32 = $(PE_LDFLAGS) -Wl,--image-base=0x10000000 -Wl,--disable-reloc-section
+
 # Flags for Unix .so (Linux side - gcc)
 UNIX_CFLAGS = -Wall -O2 -fPIC -fvisibility=hidden
-UNIX_CFLAGS += -DWINE_UNIX_LIB -D__WINESRC__
+UNIX_CFLAGS += -DWINE_UNIX_LIB -D__WINESRC__ -DWINEASIO_DEBUG
 UNIX_CFLAGS += -I$(WINE_PREFIX)/include
 UNIX_CFLAGS += -I$(WINE_PREFIX)/include/wine
 UNIX_CFLAGS += -I$(WINE_PREFIX)/include/wine/windows
@@ -54,6 +60,9 @@ UNIX_SOURCES = asio_unix.c
 # Note: 32-bit uses "wineasio.dll" (not wineasio32) to match Wine's expected naming
 DLL32 = wineasio.dll
 DLL64 = wineasio64.dll
+# WINE 11 WoW64 FIX: Both 32-bit and 64-bit PE DLLs need 64-bit Unix .so files!
+# In Wine 11 WoW64, there is no 32-bit Unix side - all Unix code runs in 64-bit.
+# The 32-bit PE DLL (wineasio.dll) loads wineasio.so from x86_64-unix/ (not i386-unix/)
 SO32 = wineasio.so
 SO64 = wineasio64.so
 
@@ -66,7 +75,9 @@ NTDLL_LIB64 = $(BUILD_DIR)/libntdll_wine64.a
 # Installation directories
 INSTALL_DIR32 = $(WINE_PREFIX)/lib/wine/i386-windows
 INSTALL_DIR64 = $(WINE_PREFIX)/lib/wine/x86_64-windows
-INSTALL_UNIX32 = $(WINE_PREFIX)/lib/wine/i386-unix
+# WINE 11 WoW64 FIX: Both 32-bit and 64-bit Unix .so go to x86_64-unix/
+# There is no i386-unix in Wine 11 WoW64 builds - all Unix code is 64-bit
+INSTALL_UNIX32 = $(WINE_PREFIX)/lib/wine/x86_64-unix
 INSTALL_UNIX64 = $(WINE_PREFIX)/lib/wine/x86_64-unix
 
 # GUI installation
@@ -100,8 +111,8 @@ all: 64 32
 32: $(BUILD_DIR)/$(DLL32) $(BUILD_DIR)/$(SO32)
 	@echo "32-bit build complete"
 	@echo "  PE DLL:  $(BUILD_DIR)/$(DLL32)"
-	@echo "  Unix SO: $(BUILD_DIR)/$(SO32)"
-	@echo "  (Note: 32-bit files use 'wineasio' name, not 'wineasio32')"
+	@echo "  Unix SO: $(BUILD_DIR)/$(SO32) (64-bit for Wine WoW64!)"
+	@echo "  (Note: 32-bit PE uses 64-bit Unix .so in Wine 11 WoW64)"
 
 $(BUILD_DIR):
 	mkdir -p $(BUILD_DIR)
@@ -111,7 +122,7 @@ $(NTDLL_LIB64): $(NTDLL_DEF64) | $(BUILD_DIR)
 	@echo "Creating 64-bit ntdll import library..."
 	$(DLLTOOL64) -d $(NTDLL_DEF64) -l $@
 
-# Create ntdll import library for 32-bit (uses different def file for stdcall)
+# Create ntdll import library for 32-bit
 $(NTDLL_LIB32): $(NTDLL_DEF32) | $(BUILD_DIR)
 	@echo "Creating 32-bit ntdll import library..."
 	$(DLLTOOL32) -d $(NTDLL_DEF32) -l $@
@@ -124,21 +135,19 @@ $(BUILD_DIR)/$(DLL64): $(PE_SOURCES) unixlib.h $(NTDLL_LIB64) | $(BUILD_DIR)
 		$(NTDLL_LIB64) \
 		$(PE_LDFLAGS) $(PE_LIBS) \
 		-Wl,--out-implib,$(BUILD_DIR)/libwineasio64.a
-	@echo "Marking as Wine builtin..."
+	@echo "Marking as Wine builtin (64-bit)..."
 	-$(WINEBUILD) --builtin $@ 2>/dev/null || true
 
-# 32-bit PE DLL
-# Note: We use wineasio.def to export functions without stdcall decoration
-# because Wine's LdrGetProcedureAddress looks for undecorated names
+# 32-bit PE DLL - must be marked as builtin for Unix side loading to work
 $(BUILD_DIR)/$(DLL32): $(PE_SOURCES) unixlib.h $(NTDLL_LIB32) wineasio.def | $(BUILD_DIR)
 	@echo "Building 32-bit PE DLL..."
 	$(MINGW32) $(PE_CFLAGS) -m32 \
 		-o $@ $(PE_SOURCES) \
 		$(NTDLL_LIB32) \
-		$(PE_LDFLAGS) $(PE_LIBS) \
+		$(PE_LDFLAGS_32) $(PE_LIBS) \
 		wineasio.def \
 		-Wl,--out-implib,$(BUILD_DIR)/libwineasio.a
-	@echo "Marking as Wine builtin..."
+	@echo "Marking as Wine builtin (32-bit)..."
 	-$(WINEBUILD) --builtin $@ 2>/dev/null || true
 
 # 64-bit Unix .so
@@ -148,10 +157,12 @@ $(BUILD_DIR)/$(SO64): $(UNIX_SOURCES) unixlib.h | $(BUILD_DIR)
 		-o $@ $(UNIX_SOURCES) \
 		$(UNIX_LDFLAGS) $(UNIX_LIBS)
 
-# 32-bit Unix .so
+# 32-bit Unix .so - ACTUALLY 64-bit for Wine 11 WoW64!
+# In Wine 11 WoW64, the 32-bit PE DLL loads a 64-bit Unix .so via WoW64 thunking.
+# There is no 32-bit Unix side in Wine WoW64 - all Unix code runs in 64-bit.
 $(BUILD_DIR)/$(SO32): $(UNIX_SOURCES) unixlib.h | $(BUILD_DIR)
-	@echo "Building 32-bit Unix .so..."
-	$(GCC) $(UNIX_CFLAGS) -m32 \
+	@echo "Building Unix .so for 32-bit PE (64-bit binary for Wine WoW64)..."
+	$(GCC) $(UNIX_CFLAGS) -m64 \
 		-o $@ $(UNIX_SOURCES) \
 		$(UNIX_LDFLAGS) $(UNIX_LIBS)
 
@@ -172,12 +183,12 @@ install64: $(BUILD_DIR)/$(DLL64) $(BUILD_DIR)/$(SO64)
 	@echo "64-bit installation complete"
 
 install32: $(BUILD_DIR)/$(DLL32) $(BUILD_DIR)/$(SO32)
-	@echo "Installing 32-bit WineASIO..."
+	@echo "Installing 32-bit WineASIO (PE to i386-windows, Unix to x86_64-unix)..."
 	sudo mkdir -p $(INSTALL_DIR32) $(INSTALL_UNIX32)
 	sudo cp $(BUILD_DIR)/$(DLL32) $(INSTALL_DIR32)/
 	sudo cp $(BUILD_DIR)/$(SO32) $(INSTALL_UNIX32)/
 	-sudo $(WINEBUILD) --builtin $(INSTALL_DIR32)/$(DLL32) 2>/dev/null || true
-	@echo "32-bit installation complete"
+	@echo "32-bit installation complete (Unix .so is 64-bit for Wine WoW64)"
 
 install-gui: build-gui-launchers
 	@echo "Installing WineASIO Settings GUI..."

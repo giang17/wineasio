@@ -182,7 +182,8 @@ typedef struct {
     jack_port_t *port;
     char name[MAX_NAME_LENGTH];
     BOOL active;
-    jack_default_audio_sample_t *audio_buffer;  /* Double buffer */
+    jack_default_audio_sample_t *audio_buffer;  /* Double buffer (legacy, Unix-allocated) */
+    jack_default_audio_sample_t *pe_buffer[2];  /* PE-side allocated buffers (Wine 11 WoW64 fix) */
 } IOChannel;
 
 /* Stream state - lives on Unix side */
@@ -243,16 +244,36 @@ enum { Loaded = 0, Initialized, Prepared, Running };
 
 static BOOL jack_loaded = FALSE;
 
+/* Library constructor - called when .so is loaded */
+__attribute__((constructor))
+static void wineasio_unix_init(void)
+{
+    fprintf(stderr, "[WineASIO-Unix] *** Library loaded (constructor called) ***\n");
+    fflush(stderr);
+    /* Also write to stdout in case stderr is redirected */
+    printf("[WineASIO-Unix] *** Library loaded (constructor called) ***\n");
+    fflush(stdout);
+}
+
 /* Load JACK library */
 static BOOL load_jack(void)
 {
-    if (jack_loaded) return TRUE;
+    if (jack_loaded) {
+        fprintf(stderr, "[WineASIO-Unix] load_jack(): Already loaded\n");
+        fflush(stderr);
+        return TRUE;
+    }
     
+    fprintf(stderr, "[WineASIO-Unix] load_jack(): Attempting dlopen(libjack.so.0)...\n");
+    fflush(stderr);
     jack_handle = dlopen("libjack.so.0", RTLD_NOW);
     if (!jack_handle) {
-        WARN("Failed to load libjack.so.0: %s\n", dlerror());
+        fprintf(stderr, "[WineASIO-Unix] load_jack() FAILED: %s\n", dlerror());
+        fflush(stderr);
         return FALSE;
     }
+    fprintf(stderr, "[WineASIO-Unix] load_jack(): dlopen succeeded, handle=%p\n", jack_handle);
+    fflush(stderr);
     
     #define LOAD_SYM(name) \
         p##name = dlsym(jack_handle, #name); \
@@ -293,13 +314,18 @@ static BOOL load_jack(void)
     }
     
     if (!pjack_client_open || !pjack_client_close) {
+        fprintf(stderr, "[WineASIO-Unix] load_jack() FAILED: Missing critical symbols\n");
+        fflush(stderr);
         dlclose(jack_handle);
         jack_handle = NULL;
         return FALSE;
     }
     
     jack_loaded = TRUE;
-    TRACE("JACK library loaded successfully\n");
+    fprintf(stderr, "[WineASIO-Unix] load_jack(): JACK library loaded successfully\n");
+    fprintf(stderr, "[WineASIO-Unix]     pjack_client_open=%p pjack_activate=%p\n",
+            (void*)pjack_client_open, (void*)pjack_activate);
+    fflush(stderr);
     return TRUE;
 }
 
@@ -378,31 +404,33 @@ static int jack_process_callback(jack_nframes_t nframes, void *arg)
         return 0;
     }
     
-    /* Copy JACK input buffers to our buffer */
+    /* Copy JACK input buffers to PE-side buffer
+     * Wine 11 WoW64 fix: Use pe_buffer[] instead of audio_buffer
+     * pe_buffer[0] and pe_buffer[1] are pointers to PE-allocated memory */
     for (i = 0; i < stream->num_inputs; i++) {
         if (stream->inputs[i].active && stream->inputs[i].port) {
             void *jack_buf = pjack_port_get_buffer(stream->inputs[i].port, nframes);
-            if (jack_buf && stream->inputs[i].audio_buffer) {
-                TRACE("Copying input %d, buffer=%p, index=%d\n", i, stream->inputs[i].audio_buffer, stream->buffer_index);
-                memcpy(&stream->inputs[i].audio_buffer[nframes * stream->buffer_index],
-                       jack_buf, sizeof(jack_default_audio_sample_t) * nframes);
+            jack_default_audio_sample_t *pe_buf = stream->inputs[i].pe_buffer[stream->buffer_index];
+            if (jack_buf && pe_buf) {
+                TRACE("Copying input %d, pe_buffer[%d]=%p\n", i, stream->buffer_index, pe_buf);
+                memcpy(pe_buf, jack_buf, sizeof(jack_default_audio_sample_t) * nframes);
             } else {
-                WARN("Input %d: jack_buf=%p, audio_buffer=%p\n", i, jack_buf, stream->inputs[i].audio_buffer);
+                WARN("Input %d: jack_buf=%p, pe_buffer[%d]=%p\n", i, jack_buf, stream->buffer_index, pe_buf);
             }
         }
     }
     
-    /* Copy our output buffer to JACK */
+    /* Copy PE-side output buffer to JACK
+     * Wine 11 WoW64 fix: Use pe_buffer[] instead of audio_buffer */
     for (i = 0; i < stream->num_outputs; i++) {
         if (stream->outputs[i].active && stream->outputs[i].port) {
             void *jack_buf = pjack_port_get_buffer(stream->outputs[i].port, nframes);
-            if (jack_buf && stream->outputs[i].audio_buffer) {
-                TRACE("Copying output %d, buffer=%p, index=%d\n", i, stream->outputs[i].audio_buffer, stream->buffer_index);
-                memcpy(jack_buf,
-                       &stream->outputs[i].audio_buffer[nframes * stream->buffer_index],
-                       sizeof(jack_default_audio_sample_t) * nframes);
+            jack_default_audio_sample_t *pe_buf = stream->outputs[i].pe_buffer[stream->buffer_index];
+            if (jack_buf && pe_buf) {
+                TRACE("Copying output %d, pe_buffer[%d]=%p\n", i, stream->buffer_index, pe_buf);
+                memcpy(jack_buf, pe_buf, sizeof(jack_default_audio_sample_t) * nframes);
             } else {
-                WARN("Output %d: jack_buf=%p, audio_buffer=%p\n", i, jack_buf, stream->outputs[i].audio_buffer);
+                WARN("Output %d: jack_buf=%p, pe_buffer[%d]=%p\n", i, jack_buf, stream->buffer_index, pe_buf);
             }
         }
     }
@@ -476,19 +504,31 @@ static AsioStream *handle_to_stream(asio_handle h)
 
 static NTSTATUS asio_init(void *args)
 {
-    TRACE("%s called\n", __func__);
     struct asio_init_params *params = args;
     AsioStream *stream;
     jack_status_t status;
     jack_options_t options;
     int i;
     
-    TRACE("Initializing WineASIO\n");
+    /* Always print to stderr for debugging, regardless of WINEASIO_DEBUG */
+    fprintf(stderr, "[WineASIO-Unix] >>> asio_init() called\n");
+    fprintf(stderr, "[WineASIO-Unix]     config: inputs=%d outputs=%d bufsize=%d\n",
+            params->config.num_inputs, params->config.num_outputs, 
+            params->config.preferred_bufsize);
+    fprintf(stderr, "[WineASIO-Unix]     config: client_name='%s' autoconnect=%d\n",
+            params->config.client_name, params->config.autoconnect);
+    fflush(stderr);
     
+    fprintf(stderr, "[WineASIO-Unix] Step 1: Loading JACK library...\n");
+    fflush(stderr);
     if (!load_jack()) {
+        fprintf(stderr, "[WineASIO-Unix] FAILED: Could not load JACK library!\n");
+        fflush(stderr);
         params->result = ASE_NotPresent;
         return STATUS_SUCCESS;
     }
+    fprintf(stderr, "[WineASIO-Unix] Step 1: JACK library loaded OK\n");
+    fflush(stderr);
     
     stream = calloc(1, sizeof(*stream));
     if (!stream) {
@@ -515,16 +555,40 @@ static NTSTATUS asio_init(void *args)
     }
     
     /* Open JACK client */
+    fprintf(stderr, "[WineASIO-Unix] Step 2: Opening JACK client '%s'...\n", stream->client_name);
+    fflush(stderr);
     options = JackNoStartServer;  /* Don't start JACK if not running */
+    fprintf(stderr, "[WineASIO-Unix]     Calling pjack_client_open(%s, 0x%x, &status)...\n", 
+            stream->client_name, options);
+    fflush(stderr);
     stream->client = pjack_client_open(stream->client_name, options, &status);
+    fprintf(stderr, "[WineASIO-Unix]     pjack_client_open returned: client=%p, status=0x%x\n",
+            (void*)stream->client, status);
+    fflush(stderr);
     if (!stream->client) {
-        WARN("Failed to open JACK client: status=0x%x\n", status);
+        fprintf(stderr, "[WineASIO-Unix] FAILED: Could not open JACK client! status=0x%x\n", status);
+        fprintf(stderr, "[WineASIO-Unix]     Status bits: ");
+        if (status & 0x01) fprintf(stderr, "Failure ");
+        if (status & 0x02) fprintf(stderr, "InvalidOption ");
+        if (status & 0x04) fprintf(stderr, "NameNotUnique ");
+        if (status & 0x08) fprintf(stderr, "ServerStarted ");
+        if (status & 0x10) fprintf(stderr, "ServerFailed ");
+        if (status & 0x20) fprintf(stderr, "ServerError ");
+        if (status & 0x40) fprintf(stderr, "NoSuchClient ");
+        if (status & 0x80) fprintf(stderr, "LoadFailure ");
+        if (status & 0x100) fprintf(stderr, "InitFailure ");
+        if (status & 0x200) fprintf(stderr, "ShmFailure ");
+        if (status & 0x400) fprintf(stderr, "VersionError ");
+        fprintf(stderr, "\n");
+        fflush(stderr);
         free(stream);
         params->result = ASE_NotPresent;
         return STATUS_SUCCESS;
     }
     
-    TRACE("JACK client opened as '%s'\n", pjack_get_client_name(stream->client));
+    fprintf(stderr, "[WineASIO-Unix] Step 2: JACK client opened as '%s'\n", 
+            pjack_get_client_name(stream->client));
+    fflush(stderr);
     
     /* Get JACK info */
     stream->sample_rate = pjack_get_sample_rate(stream->client);
@@ -599,13 +663,18 @@ static NTSTATUS asio_init(void *args)
         pjack_set_latency_callback(stream->client, jack_latency_callback, stream);
     
     /* Activate JACK client */
+    fprintf(stderr, "[WineASIO-Unix] Step 3: Activating JACK client...\n");
+    fflush(stderr);
     if (pjack_activate(stream->client)) {
-        WARN("Failed to activate JACK client\n");
+        fprintf(stderr, "[WineASIO-Unix] FAILED: Could not activate JACK client!\n");
+        fflush(stderr);
         pjack_client_close(stream->client);
         free(stream);
         params->result = ASE_HWMalfunction;
         return STATUS_SUCCESS;
     }
+    fprintf(stderr, "[WineASIO-Unix] Step 3: JACK client activated OK\n");
+    fflush(stderr);
     
     /* Auto-connect if requested */
     if (stream->autoconnect) {
@@ -632,9 +701,11 @@ static NTSTATUS asio_init(void *args)
     params->sample_rate = stream->sample_rate;
     params->result = ASE_OK;
     
-    TRACE("WineASIO initialized: %d inputs, %d outputs, %.0f Hz, %d samples, MIDI=%s\n",
+    fprintf(stderr, "[WineASIO-Unix] <<< asio_init() SUCCESS: %d inputs, %d outputs, %.0f Hz, %d samples, MIDI=%s\n",
           stream->num_inputs, stream->num_outputs, stream->sample_rate, stream->buffer_size,
           stream->midi_enabled ? "enabled" : "disabled");
+    fprintf(stderr, "[WineASIO-Unix]     handle=%p\n", (void*)stream);
+    fflush(stderr);
     
     return STATUS_SUCCESS;
 }
@@ -942,13 +1013,14 @@ static NTSTATUS asio_create_buffers(void *args)
     AsioStream *stream = handle_to_stream(params->handle);
     struct asio_buffer_info *infos = params->buffer_infos;
     int i, j;
-    size_t buffer_bytes;
     
-    TRACE("asio_create_buffers called: stream=%p, num_channels=%d, buffer_size=%d\n", 
-          stream, params->num_channels, params->buffer_size);
+    fprintf(stderr, "[WineASIO-Unix] asio_create_buffers: stream=%p, num_channels=%d, buffer_size=%d\n", 
+            (void*)stream, params->num_channels, params->buffer_size);
+    fflush(stderr);
     
     if (!stream || stream->state < Initialized) {
-        ERR("Invalid stream or state: stream=%p, state=%d\n", stream, stream ? stream->state : -1);
+        fprintf(stderr, "[WineASIO-Unix] asio_create_buffers: Invalid stream or state\n");
+        fflush(stderr);
         params->result = ASE_InvalidMode;
         return STATUS_SUCCESS;
     }
@@ -965,9 +1037,21 @@ static NTSTATUS asio_create_buffers(void *args)
         stream->buffer_size = pjack_get_buffer_size(stream->client);
     }
     
-    buffer_bytes = sizeof(jack_default_audio_sample_t) * stream->buffer_size * 2;
+    /*
+     * WINE 11 WoW64 FIX:
+     * Buffer pointers are now allocated on the PE (Windows) side and passed to us.
+     * This is necessary because in Wine 11 WoW64, the Unix side runs in 64-bit
+     * address space while 32-bit PE code runs in emulated 32-bit space.
+     * Buffers allocated here with calloc() would have 64-bit addresses that
+     * cannot be accessed by 32-bit Windows code.
+     *
+     * The PE side has already set buffer_ptr[0] and buffer_ptr[1] to valid
+     * 32-bit addresses. We just need to store these pointers and mark channels active.
+     */
+    fprintf(stderr, "[WineASIO-Unix] asio_create_buffers: Using PE-side allocated buffers (Wine 11 WoW64 fix)\n");
+    fflush(stderr);
     
-    /* Allocate buffers for each channel */
+    /* Process each channel - use PE-allocated buffer pointers */
     for (i = 0; i < params->num_channels; i++) {
         int ch = infos[i].channel_num;
         
@@ -977,50 +1061,40 @@ static NTSTATUS asio_create_buffers(void *args)
                 return STATUS_SUCCESS;
             }
             
-            /* Free old buffer if exists */
-            free(stream->inputs[ch].audio_buffer);
-            
-            /* Allocate new double buffer */
-            stream->inputs[ch].audio_buffer = calloc(1, buffer_bytes);
-            if (!stream->inputs[ch].audio_buffer) {
-                params->result = ASE_NoMemory;
-                return STATUS_SUCCESS;
+            /* Free old Unix-side buffer if exists (legacy cleanup) */
+            if (stream->inputs[ch].audio_buffer) {
+                free(stream->inputs[ch].audio_buffer);
+                stream->inputs[ch].audio_buffer = NULL;
             }
             
+            /* Store PE-side buffer pointers for JACK callback use */
+            stream->inputs[ch].pe_buffer[0] = (jack_default_audio_sample_t *)(UINT_PTR)infos[i].buffer_ptr[0];
+            stream->inputs[ch].pe_buffer[1] = (jack_default_audio_sample_t *)(UINT_PTR)infos[i].buffer_ptr[1];
             stream->inputs[ch].active = TRUE;
             
-            /* Return buffer pointers */
-            infos[i].buffer_ptr[0] = (UINT64)(UINT_PTR)&stream->inputs[ch].audio_buffer[0];
-            infos[i].buffer_ptr[1] = (UINT64)(UINT_PTR)&stream->inputs[ch].audio_buffer[stream->buffer_size];
-            TRACE("Input channel %d: buffer=%p, ptr[0]=0x%llx, ptr[1]=0x%llx\n",
-                  ch, stream->inputs[ch].audio_buffer, 
-                  (unsigned long long)infos[i].buffer_ptr[0],
-                  (unsigned long long)infos[i].buffer_ptr[1]);
+            fprintf(stderr, "[WineASIO-Unix]   Input ch %d: PE buffers[0]=%p, buffers[1]=%p\n",
+                    ch, (void*)stream->inputs[ch].pe_buffer[0], (void*)stream->inputs[ch].pe_buffer[1]);
+            fflush(stderr);
         } else {
             if (ch < 0 || ch >= stream->num_outputs) {
                 params->result = ASE_InvalidParameter;
                 return STATUS_SUCCESS;
             }
             
-            /* Free old buffer if exists */
-            free(stream->outputs[ch].audio_buffer);
-            
-            /* Allocate new double buffer */
-            stream->outputs[ch].audio_buffer = calloc(1, buffer_bytes);
-            if (!stream->outputs[ch].audio_buffer) {
-                params->result = ASE_NoMemory;
-                return STATUS_SUCCESS;
+            /* Free old Unix-side buffer if exists (legacy cleanup) */
+            if (stream->outputs[ch].audio_buffer) {
+                free(stream->outputs[ch].audio_buffer);
+                stream->outputs[ch].audio_buffer = NULL;
             }
             
+            /* Store PE-side buffer pointers for JACK callback use */
+            stream->outputs[ch].pe_buffer[0] = (jack_default_audio_sample_t *)(UINT_PTR)infos[i].buffer_ptr[0];
+            stream->outputs[ch].pe_buffer[1] = (jack_default_audio_sample_t *)(UINT_PTR)infos[i].buffer_ptr[1];
             stream->outputs[ch].active = TRUE;
             
-            /* Return buffer pointers */
-            infos[i].buffer_ptr[0] = (UINT64)(UINT_PTR)&stream->outputs[ch].audio_buffer[0];
-            infos[i].buffer_ptr[1] = (UINT64)(UINT_PTR)&stream->outputs[ch].audio_buffer[stream->buffer_size];
-            TRACE("Output channel %d: buffer=%p, ptr[0]=0x%llx, ptr[1]=0x%llx\n",
-                  ch, stream->outputs[ch].audio_buffer,
-                  (unsigned long long)infos[i].buffer_ptr[0],
-                  (unsigned long long)infos[i].buffer_ptr[1]);
+            fprintf(stderr, "[WineASIO-Unix]   Output ch %d: PE buffers[0]=%p, buffers[1]=%p\n",
+                    ch, (void*)stream->outputs[ch].pe_buffer[0], (void*)stream->outputs[ch].pe_buffer[1]);
+            fflush(stderr);
         }
     }
     
