@@ -342,35 +342,7 @@ If 32-bit apps load WineASIO but produce no audio:
 2. Check for `[WineASIO-Unix]` debug messages - if missing, Unix library not loading
 3. Rebuild with `make -f Makefile.wine11 32` and reinstall
 
-### Berkeley DB crashes (some 32-bit apps)
 
-**Error message:**
-```
-BDB1539 Build signature doesn't match environment
-Cannot open DB environment: BDB0091 DB_VERSION_MISMATCH
-```
-
-**What's happening:**
-- This is a Wine/libdb compatibility issue, **NOT a WineASIO bug**
-- Some 32-bit applications (REAPER, some VST hosts) use GTK+ which depends on Berkeley DB
-- System libdb version may conflict with Wine's expectations
-- The crash occurs **before** WineASIO is initialized
-
-**Workaround:**
-1. **Use 64-bit versions** of your DAW/plugins (recommended)
-2. **Remove stale DB files:**
-   ```sh
-   rm -rf ~/.wine/.local/share/recently-used.xbel*
-   find ~/.wine -name "*.db" -delete
-   ```
-3. **Test WineASIO separately:** Use the included test programs to verify WineASIO works:
-   ```sh
-   # Build test program
-   i686-w64-mingw32-gcc -o tests/test_asio_minimal.exe tests/test_asio_minimal.c -lole32 -luuid
-   wine tests/test_asio_minimal.exe
-   ```
-
-**Note:** WineASIO 32-bit is fully working as of v1.4.2. See `docs/WINE11_WOW64_32BIT_SOLUTION.md` for details.
 
 ---
 
