@@ -4,6 +4,9 @@ build32/
 build64/
 dist/
 
+# Generated files
+.rules
+
 # Object files
 *.o
 *.a
