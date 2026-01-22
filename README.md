@@ -1,15 +1,26 @@
 # WineASIO
 
-WineASIO provides an ASIO to JACK driver for WINE.  
-ASIO is the most common Windows low-latency driver, so is commonly used in audio workstation programs.
+WineASIO provides an ASIO to JACK driver for WINE, enabling professional Windows audio applications to run seamlessly on Linux with low-latency performance.
 
-You can, for example, use with FL Studio, EZkeys, UVI Workstation, and other Programs (together with JACK).
+ASIO (Audio Stream Input/Output) is the industry-standard Windows low-latency audio driver, commonly used by DAWs, virtual instruments, and audio production software. WineASIO bridges ASIO calls to JACK, allowing you to integrate Windows applications into a native Linux audio workflow with PipeWire/JACK.
+
+**Compatible Applications:** FL Studio, Native Instruments Kontakt, EZkeys, UVI Workstation, Reaper, and many other professional audio programs.
+
+### Professional Audio Production Setup
+
+The screenshot below demonstrates a complete Linux audio production environment with WineASIO seamlessly integrating Windows software into the native JACK/PipeWire audio infrastructure:
+
+- **MOTU M4 JACK Settings** (left) - Running with optimized low-latency configuration (~10.7ms at 48kHz, 256 frames, 2 periods)
+- **Patchance** (bottom-left) - Visualizing real-time audio routing between WineASIO, PipeWire, and hardware interfaces
+- **Native Instruments Kontakt 7** (right) - Professional sample library running flawlessly with excellent sound quality via WineASIO
+
+This setup proves that Linux is a fully viable platform for professional audio production, combining the power of open-source tools with industry-standard Windows audio software.
 
 <p align="center">
-  <img src="screenshot.png" alt="FL Studio 2025 with WineASIO Settings" width="800">
+  <img src="screenshot.png" alt="MOTU M4 JACK Settings, Patchance routing, and Kontakt 7 via WineASIO" width="800">
 </p>
 
-*FL Studio 2025 running on Wine 11 with WineASIO and the Settings GUI*
+*Complete audio production setup: MOTU M4 JACK Settings, Patchance showing WineASIO routing, and Native Instruments Kontakt 7 running via Wine 11*
 
 ---
 
