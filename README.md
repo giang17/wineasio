@@ -401,6 +401,14 @@ wineasio/
 
 ## Change Log
 
+### 1.4.3 (Performance Fix) - January 28, 2026
+* **FIX:** Remove excessive debug traces that caused xruns
+* **FIX:** Remove TRACE calls from real-time JACK callback path
+* **FIX:** Remove high-frequency polling traces (~1000 calls/sec)
+* **CHANGE:** Debug output disabled by default (enable with `-DWINEASIO_DEBUG`)
+* **DOCS:** Document dynamic symbol loading approach for Wine 11 WoW64
+* Restores `.def` placeholder files for compatibility
+
 ### 1.4.2 (Wine 11 WoW64 Fix) - January 21, 2026
 * **CRITICAL FIX:** 32-bit PE now correctly uses 64-bit Unix library
 * **FIX:** Audio buffers allocated on PE side for WoW64 address space compatibility
