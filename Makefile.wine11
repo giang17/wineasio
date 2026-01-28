@@ -43,8 +43,9 @@ PE_LIBS = -lole32 -loleaut32 -luuid -ladvapi32 -lkernel32
 PE_LDFLAGS_32 = $(PE_LDFLAGS) -Wl,--image-base=0x10000000 -Wl,--disable-reloc-section
 
 # Flags for Unix .so (Linux side - gcc)
+# Note: Add -DWINEASIO_DEBUG to enable trace output for debugging
 UNIX_CFLAGS = -Wall -O2 -fPIC -fvisibility=hidden
-UNIX_CFLAGS += -DWINE_UNIX_LIB -D__WINESRC__ -DWINEASIO_DEBUG
+UNIX_CFLAGS += -DWINE_UNIX_LIB -D__WINESRC__
 UNIX_CFLAGS += -I$(WINE_PREFIX)/include
 UNIX_CFLAGS += -I$(WINE_PREFIX)/include/wine
 UNIX_CFLAGS += -I$(WINE_PREFIX)/include/wine/windows
