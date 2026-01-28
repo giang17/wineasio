@@ -2,7 +2,9 @@
 
 This document describes the technical changes required to port WineASIO from the legacy Wine architecture to Wine 11's new PE/Unix split architecture.
 
-**Last Updated:** 2026-01-21 (v1.4.2)
+**Last Updated:** 2026-01-22 (v1.4.2)
+
+> **Key Discovery:** All Wine-specific ntdll symbols (`__wine_unix_call_dispatcher`, `NtQueryVirtualMemory`) must be loaded **dynamically** via `GetProcAddress()` to work correctly on 32-bit WoW64. Static imports cause crashes due to DATA export resolution issues and stdcall decoration mismatches.
 
 > **Important:** See also `WINE11_WOW64_ARCHITECTURE.md` and `WINE11_WOW64_32BIT_SOLUTION.md` for the critical WoW64 architecture discovery.
 
@@ -64,15 +66,16 @@ Starting with Wine 10.2, Wine moved to a new builtin DLL architecture:
 ## File Structure
 
 ```
-wineasio-1.3.0/
+wineasio-fork/
 ├── asio_pe.c           # PE-side implementation (Windows code)
 ├── asio_unix.c         # Unix-side implementation (JACK code)
 ├── unixlib.h           # Shared interface between PE and Unix
 ├── wineasio.def        # DLL export definitions (for 32-bit)
-├── ntdll_wine.def      # ntdll import definitions (64-bit)
-├── ntdll_wine32.def    # ntdll import definitions (32-bit)
+├── ntdll_wine.def      # ntdll placeholder (64-bit) - empty, dynamic loading
+├── ntdll_wine32.def    # ntdll placeholder (32-bit) - empty, dynamic loading
 ├── Makefile.wine11     # New build system for Wine 11
 ├── asio.c              # Legacy combined code (Wine ≤ 10.1)
+├── tests/              # Test programs for debugging
 └── gui/
     ├── settings.py                 # PyQt5/6 Settings GUI
     ├── settings.ui                 # Qt Designer UI file
@@ -147,27 +150,50 @@ Key functions:
 
 ### Initialization (PE Side)
 
-```c
-// Import from ntdll
-extern unixlib_handle_t __wine_unixlib_handle;
-extern NTSTATUS (WINAPI *__wine_unix_call_dispatcher)(...);
+**Important:** All Wine-specific symbols are loaded **dynamically** via `GetProcAddress()` to avoid import resolution issues on 32-bit WoW64. This is a critical fix discovered during the Wine 11 porting process.
 
-// Get Unix library handle in DllMain
+The original approach using `extern` imports caused crashes on 32-bit WoW64 because:
+1. `__wine_unix_call_dispatcher` is exported as DATA (a pointer), not a function
+2. Static imports resolved it incorrectly as a function call to NULL
+3. stdcall decoration mismatches on 32-bit (`@N` suffix issues)
+
+```c
+// Type definitions for dynamically loaded functions
+typedef NTSTATUS (*wine_unix_call_dispatcher_t)(UINT64 handle, unsigned int code, void *args);
+typedef NTSTATUS (*NtQueryVirtualMemory_t)(HANDLE, LPCVOID, ULONG, PVOID, SIZE_T, SIZE_T*);
+
+// Function pointers - loaded at runtime
+static wine_unix_call_dispatcher_t p__wine_unix_call_dispatcher = NULL;
+static NtQueryVirtualMemory_t pNtQueryVirtualMemory = NULL;
+static UINT64 wineasio_unix_handle = 0;
+
+// Initialize in DllMain - ALL symbols loaded dynamically
 static BOOL init_wine_unix_call(HINSTANCE hInstDLL)
 {
-    // Get NtQueryVirtualMemory dynamically (avoids stdcall issues on 32-bit)
-    pNtQueryVirtualMemory = GetProcAddress(GetModuleHandleA("ntdll.dll"), 
-                                           "NtQueryVirtualMemory");
+    HMODULE hNtdll = GetModuleHandleA("ntdll.dll");
+    
+    // Load __wine_unix_call_dispatcher - it's exported as DATA (a pointer)
+    // GetProcAddress returns the address of the exported variable
+    wine_unix_call_dispatcher_t *dispatcher_ptr = 
+        (wine_unix_call_dispatcher_t *)GetProcAddress(hNtdll, "__wine_unix_call_dispatcher");
+    p__wine_unix_call_dispatcher = *dispatcher_ptr;  // Dereference to get function pointer
+    
+    // Load NtQueryVirtualMemory dynamically (avoids stdcall decoration issues on 32-bit)
+    pNtQueryVirtualMemory = (NtQueryVirtualMemory_t)GetProcAddress(hNtdll, "NtQueryVirtualMemory");
     
     // Query for Unix library handle (MemoryWineUnixFuncs = 1000)
     pNtQueryVirtualMemory(GetCurrentProcess(), hInstDLL, 
-                          1000, &wineasio_unix_handle, ...);
+                          1000 /* MemoryWineUnixFuncs */, 
+                          &wineasio_unix_handle, sizeof(wineasio_unix_handle), NULL);
+    return TRUE;
 }
 
 // Call Unix function
 #define UNIX_CALL(func, params) \
-    wine_unix_call(wineasio_unix_handle, unix_##func, params)
+    p__wine_unix_call_dispatcher(wineasio_unix_handle, unix_##func, params)
 ```
+
+**Note:** The `ntdll_wine.def` and `ntdll_wine32.def` files are now essentially empty (no EXPORTS) because all Wine-specific symbols are loaded dynamically. They exist only to create empty import libraries for the linker.
 
 ### Unix Function Table (Unix Side)
 
@@ -242,6 +268,9 @@ Key targets:
 2. **NtQueryVirtualMemory**: Same decoration issue
    - Solution: Load dynamically via `GetProcAddress()`
 
+3. **__wine_unix_call_dispatcher DATA export**: This symbol is exported as DATA (a pointer to a function), not as a function itself. Static imports resolve it incorrectly.
+   - Solution: Load dynamically via `GetProcAddress()` and dereference
+
 ```c
 // wineasio.def - exports without decoration
 EXPORTS
@@ -249,6 +278,13 @@ EXPORTS
     DllGetClassObject
     DllRegisterServer
     DllUnregisterServer
+```
+
+```c
+// ntdll_wine.def / ntdll_wine32.def - empty, all loaded dynamically
+LIBRARY ntdll.dll
+EXPORTS
+    ; No static imports needed - all Wine-specific functions loaded dynamically
 ```
 
 ### Naming Convention
@@ -288,6 +324,29 @@ Wine 11 WoW64 uses separate directories for PE and Unix libraries.
 
 ## Debugging
 
+### WineASIO Debug Output
+
+By default, WineASIO produces minimal output to avoid causing audio xruns:
+
+```
+[WineASIO] Initialized: 16 in, 16 out, 48000 Hz, 256 samples
+```
+
+To enable verbose tracing, rebuild with `-DWINEASIO_DEBUG`:
+
+```bash
+# Edit Makefile.wine11, add to UNIX_CFLAGS:
+UNIX_CFLAGS += -DWINEASIO_DEBUG
+
+# Rebuild and reinstall
+make -f Makefile.wine11 clean all
+sudo make -f Makefile.wine11 install
+```
+
+This enables `wineasio:trace:` messages for all ASIO function calls.
+
+**Warning:** Verbose tracing can cause xruns during audio playback due to the overhead of fprintf calls in the audio callback path. Only enable for debugging, not production use.
+
 ### Enable Wine Debug Output
 
 ```bash
@@ -315,6 +374,14 @@ i686-w64-mingw32-objdump -p wineasio.dll | grep -i dllregister
 ```bash
 nm -D wineasio64.so | grep wine
 # Should show: __wine_unix_call_funcs
+```
+
+### Verify Debug Build
+
+```bash
+# Check if WINEASIO_DEBUG is enabled in the installed .so
+strings /opt/wine-stable/lib/wine/x86_64-unix/wineasio.so | grep "wineasio:trace"
+# If output appears, debug tracing is compiled in
 ```
 
 ## 32-bit Registration (WoW64)
