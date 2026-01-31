@@ -407,5 +407,13 @@ Portions copyright (C) 2013 Joakim Hernberg
 Portions copyright (C) 2020-2023 Filipe Coelho  
 Portions copyright (C) 2026 Wine 11 Port Contributors
 
-The WineASIO library code is licensed under LGPL v2.1, see COPYING.LIB for more details.  
+The WineASIO library code is licensed under LGPL v2.1, see COPYING.LIB for more details.
 The WineASIO settings UI code is licensed under GPL v2+, see COPYING.GUI for more details.
+
+### ASIO SDK Note
+
+WineASIO does **not** require the Steinberg ASIO SDK to build. All ASIO interface definitions (structures, constants, enums) are implemented independently in this project. This is legally permissible as APIs and interfaces are not copyrightable.
+
+Older documentation (e.g., wiki pages from 2011) may mention downloading `asio.h` from Steinberg - this is no longer necessary. Additionally, Steinberg has since released the ASIO SDK under GPLv3 (the "Open Source" variant), making it compatible with open source projects.
+
+ASIO is a trademark of Steinberg Media Technologies GmbH.
