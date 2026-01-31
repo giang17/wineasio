@@ -379,60 +379,7 @@ wineasio/
 
 ## Change Log
 
-### 1.4.3 (Performance Fix) - January 28, 2026
-* **FIX:** Remove excessive debug traces that caused xruns
-* **FIX:** Remove TRACE calls from real-time JACK callback path
-* **FIX:** Remove high-frequency polling traces (~1000 calls/sec)
-* **CHANGE:** Debug output disabled by default (enable with `-DWINEASIO_DEBUG`)
-* **DOCS:** Document dynamic symbol loading approach for Wine 11 WoW64
-* Restores `.def` placeholder files for compatibility
-
-### 1.4.2 (Wine 11 WoW64 Fix) - January 21, 2026
-* **CRITICAL FIX:** 32-bit PE now correctly uses 64-bit Unix library
-* **FIX:** Audio buffers allocated on PE side for WoW64 address space compatibility
-* **FIX:** JACK callback uses PE-allocated buffers
-* **NEW:** Comprehensive WoW64 architecture documentation
-* **NEW:** Test programs for debugging (in `tests/` directory)
-* Tested with REAPER 32-bit, Garritan CFX Lite, FL Studio
-
-### 1.4.4 - January 2025
-* **REMOVED:** JACK MIDI ports - they were non-functional placeholders not connected to Windows MIDI API
-* Use Wine's built-in `winealsa.drv` + `a2jmidid` for MIDI support
-
-### 1.4.2 - January 2025
-* **CRITICAL FIX:** Wine 11 WoW64 32-bit support now fully working
-* Audio buffers allocated on PE side to solve address space mismatch
-* Test programs added for debugging
-
-### 1.4.0 (Wine 11 Port) - January 2025
-* **NEW:** Full Wine 11 support with new PE/Unix split architecture
-* **NEW:** `Makefile.wine11` for building with Wine 10.2+/11
-* **NEW:** Separate PE DLL and Unix SO builds
-* **NEW:** Support for `__wine_unix_call` interface
-* **NEW:** Settings GUI integration - launch from DAW's ASIO control panel
-* Added `asio_pe.c` - Windows-side ASIO implementation
-* Added `asio_unix.c` - Unix-side JACK implementation
-* Added `unixlib.h` - Shared interface definitions
-
-### 1.3.0
-* 24-JUL-2025: Make GUI settings panel compatible with PyQt6 or PyQt5
-* 17-JUL-2025: Load libjack.so.0 dynamically at runtime
-* 17-JUL-2025: Remove useless -mnocygwin flag
-* 28-JUN-2025: Remove dependency on asio headers
-
-### 1.2.0
-* 29-SEP-2023: Fix compatibility with Wine > 8
-* 29-SEP-2023: Add wineasio-register script
-
-### 1.1.0
-* 18-FEB-2022: Various bug fixes
-* 24-NOV-2021: Fix compatibility with Wine > 6.5
-
-### 1.0.0
-* 14-JUL-2020: Add packaging script
-* 12-MAR-2020: Fix control panel startup
-* 08-FEB-2020: Fix code to work with latest Wine
-* 08-FEB-2020: Add custom GUI for WineASIO settings
+See [CHANGELOG.md](https://github.com/giang17/wineasio/blob/master/CHANGELOG.md) for the full changelog.
 
 ---
 
