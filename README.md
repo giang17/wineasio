@@ -238,55 +238,39 @@ wine /usr/share/wineasio/wineasio-settings64.exe
 
 ---
 
-## JACK MIDI Support (Wine 11)
+## MIDI Support
 
-WineASIO 1.4.0+ creates JACK MIDI ports for routing MIDI between your DAW and other JACK applications.
+WineASIO handles **audio only** (ASIO). For MIDI with Windows applications under Wine, use Wine's built-in MIDI support:
 
-### MIDI Ports
+### How Wine MIDI Works
 
-When WineASIO connects to JACK, it registers:
-- `WineASIO:midi_in` - MIDI input (receives MIDI from other JACK clients)
-- `WineASIO:midi_out` - MIDI output (sends MIDI to other JACK clients)
-
-### Verify MIDI Ports
-
-```sh
-jack_lsp | grep -i midi
-```
-
-You should see:
-```
-WineASIO:midi_in
-WineASIO:midi_out
-```
-
-### Connecting MIDI Devices
-
-Use `jack_connect`, QjackCtl, or Carla to route MIDI:
-
-```sh
-# Connect a hardware MIDI input to WineASIO
-jack_connect "system:midi_capture_1" "WineASIO:midi_in"
-
-# Connect WineASIO MIDI output to a synth
-jack_connect "WineASIO:midi_out" "Yoshimi:midi_in"
-```
-
-### Using with a2jmidid
-
-If your MIDI devices appear as ALSA MIDI (not JACK), use `a2jmidid` to bridge them:
+Wine's `winealsa.drv` provides Windows MIDI API support via ALSA MIDI. To use MIDI devices with JACK:
 
 ```sh
 # Start the ALSA-to-JACK MIDI bridge
 a2jmidid -e &
 
-# Now ALSA MIDI devices appear as JACK MIDI ports
-jack_lsp | grep a2j
+# List available MIDI ports
+jack_lsp | grep -i midi
 ```
 
-### Relationship with Wine ALSA MIDI
+You should see your MIDI devices as `a2j:` ports:
+```
+a2j:Kurzweil KM88 [16] (capture): [0] Kurzweil KM88 (USB MIDI)
+a2j:Kurzweil KM88 [16] (playback): [0] Kurzweil KM88 (USB MIDI)
+a2j:WINE midi driver [129] (playback): [0] WINE ALSA Input
+```
 
-Wine uses `winealsa.drv` for Windows MIDI API support (separate from WineASIO). The WineASIO JACK MIDI ports provide an additional routing option specifically for JACK-based workflows.
+### Connecting MIDI Devices to Wine Applications
+
+Use `jack_connect`, QjackCtl, or Carla to route MIDI from your hardware to Wine:
+
+```sh
+# Connect a hardware MIDI keyboard to Wine
+jack_connect "a2j:Your Keyboard (capture)" "a2j:WINE midi driver (playback)"
+```
+
+The MIDI devices will then appear in your Windows DAW's MIDI settings.
 
 ---
 
@@ -297,12 +281,6 @@ Wine uses `winealsa.drv` for Windows MIDI API support (separate from WineASIO). 
 1. Ensure `wineasio-settings` is in PATH: `which wineasio-settings`
 2. Check PyQt is installed: `python3 -c "from PyQt5.QtWidgets import QApplication"`
 3. Try launching manually: `wineasio-settings`
-
-### JACK MIDI ports not visible
-
-1. Ensure JACK is running: `jack_lsp`
-2. Verify WineASIO is connected: `jack_lsp | grep WineASIO`
-3. For ALSA MIDI devices, use `a2jmidid -e` to bridge to JACK
 
 ### Wine 11: "Unix library not found"
 
@@ -417,15 +395,23 @@ wineasio/
 * **NEW:** Test programs for debugging (in `tests/` directory)
 * Tested with REAPER 32-bit, Garritan CFX Lite, FL Studio
 
-### 1.4.0 (Wine 11 Port) - January 2026
+### 1.4.4 - January 2025
+* **REMOVED:** JACK MIDI ports - they were non-functional placeholders not connected to Windows MIDI API
+* Use Wine's built-in `winealsa.drv` + `a2jmidid` for MIDI support
+
+### 1.4.2 - January 2025
+* **CRITICAL FIX:** Wine 11 WoW64 32-bit support now fully working
+* Audio buffers allocated on PE side to solve address space mismatch
+* Test programs added for debugging
+
+### 1.4.0 (Wine 11 Port) - January 2025
 * **NEW:** Full Wine 11 support with new PE/Unix split architecture
 * **NEW:** `Makefile.wine11` for building with Wine 10.2+/11
 * **NEW:** Separate PE DLL and Unix SO builds
 * **NEW:** Support for `__wine_unix_call` interface
 * **NEW:** Settings GUI integration - launch from DAW's ASIO control panel
-* **NEW:** JACK MIDI ports (`WineASIO:midi_in`, `WineASIO:midi_out`)
 * Added `asio_pe.c` - Windows-side ASIO implementation
-* Added `asio_unix.c` - Unix-side JACK implementation (with MIDI support)
+* Added `asio_unix.c` - Unix-side JACK implementation
 * Added `unixlib.h` - Shared interface definitions
 
 ### 1.3.0

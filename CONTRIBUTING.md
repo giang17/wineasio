@@ -66,7 +66,6 @@ Please test your changes with:
 2. **Both architectures** - 32-bit and 64-bit DAWs
 3. **Multiple DAWs** - FL Studio, Reaper, Ableton, etc.
 4. **Settings GUI** - Verify control panel opens from DAW
-5. **JACK MIDI** - Check MIDI ports appear in `jack_lsp`
 
 ## Debugging
 

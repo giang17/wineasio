@@ -422,99 +422,56 @@ wine reg query "HKCR\WOW6432Node\CLSID\{48D0C522-BFCC-45CC-8B84-17F25F33E6E8}"
 wine reg query "HKLM\Software\WOW6432Node\ASIO\WineASIO"
 ```
 
-## JACK MIDI Support
+## MIDI Support
 
-WineASIO includes optional JACK MIDI ports for direct MIDI routing through the JACK audio graph.
+**WineASIO handles audio only (ASIO).** For MIDI with Windows applications under Wine, use Wine's built-in MIDI support via `winealsa.drv`.
 
-### JACK MIDI Ports
+### How Wine MIDI Works
 
-When WineASIO initializes, it registers two JACK MIDI ports:
+Wine's `winealsa.drv` provides the Windows MIDI API by bridging to ALSA MIDI. This is completely separate from WineASIO and works automatically.
 
-| Port | Type | Description |
-|------|------|-------------|
-| `WineASIO:midi_in` | Input | Receives MIDI from JACK graph |
-| `WineASIO:midi_out` | Output | Sends MIDI to JACK graph |
-
-### How It Works
-
-The MIDI implementation uses a ringbuffer for thread-safe communication:
-
-```c
-/* JACK process callback handles MIDI */
-static int jack_process_callback(jack_nframes_t nframes, void *arg)
-{
-    /* Read MIDI input events */
-    if (stream->midi_enabled && stream->midi_input.port) {
-        void *midi_buf = pjack_port_get_buffer(stream->midi_input.port, nframes);
-        jack_nframes_t event_count = pjack_midi_get_event_count(midi_buf);
-        for (jack_nframes_t j = 0; j < event_count; j++) {
-            jack_midi_event_t event;
-            pjack_midi_event_get(&event, midi_buf, j);
-            midi_ringbuffer_write(&stream->midi_input.ringbuffer, 
-                                 event.buffer, event.size, event.time);
-        }
-    }
-    
-    /* Write MIDI output events */
-    if (stream->midi_enabled && stream->midi_output.port) {
-        void *midi_buf = pjack_port_get_buffer(stream->midi_output.port, nframes);
-        pjack_midi_clear_buffer(midi_buf);
-        /* ... write pending events from ringbuffer ... */
-    }
-}
-```
-
-### Verify MIDI Ports
-
-After starting a WineASIO application (like FL Studio):
+To use MIDI devices with JACK-based workflows:
 
 ```bash
-# List JACK MIDI ports
-jack_lsp -t | grep -E 'WineASIO.*midi'
+# Start the ALSA-to-JACK MIDI bridge
+a2jmidid -e &
 
-# Expected output:
-# WineASIO:midi_in
-#     8 bit raw midi
-# WineASIO:midi_out
-#     8 bit raw midi
+# List available MIDI ports
+jack_lsp | grep -i midi
 ```
 
-### Connecting MIDI Devices
+You should see your MIDI devices as `a2j:` ports:
+```
+a2j:Kurzweil KM88 [16] (capture): [0] Kurzweil KM88 (USB MIDI)
+a2j:Kurzweil KM88 [16] (playback): [0] Kurzweil KM88 (USB MIDI)
+a2j:WINE midi driver [129] (playback): [0] WINE ALSA Input
+```
 
-Use `jack_connect` or QjackCtl to route MIDI:
+### Connecting MIDI Devices to Wine Applications
+
+Use `jack_connect`, QjackCtl, or Carla to route MIDI from your hardware to Wine:
 
 ```bash
-# Connect MIDI controller to WineASIO input
-jack_connect "a2j:Your Controller [X] (capture): [0] MIDI 1" "WineASIO:midi_in"
-
-# Connect WineASIO output to synthesizer
-jack_connect "WineASIO:midi_out" "a2j:Your Synth [X] (playback): [0] MIDI 1"
+# Connect a hardware MIDI keyboard to Wine
+jack_connect "a2j:Your Keyboard (capture)" "a2j:WINE midi driver (playback)"
 ```
 
-### Relationship with Wine ALSA MIDI
+The MIDI devices will then appear in your Windows DAW's MIDI settings (e.g., FL Studio's MIDI settings dialog).
 
-WineASIO's JACK MIDI ports are **additional** to Wine's built-in ALSA MIDI support:
+### Why WineASIO Doesn't Include MIDI
 
-| Feature | Source | Use Case |
-|---------|--------|----------|
-| Wine ALSA MIDI | `winealsa.drv` | Direct hardware access (e.g., "M4 - M4 MIDI 1") |
-| WineASIO JACK MIDI | `wineasio.so` | JACK graph routing, software connections |
-
-**Note:** Windows applications (like FL Studio) use Wine's ALSA MIDI driver for the Windows MIDI API. The JACK MIDI ports are useful for:
-- Direct routing in the JACK graph without a2jmidid
-- Connecting to JACK-native applications (Ardour, Carla, etc.)
-- Advanced MIDI routing scenarios
+ASIO is an **audio-only** interface. While some ASIO drivers bundle MIDI functionality, WineASIO focuses purely on low-latency audio. Wine's existing MIDI infrastructure (`winealsa.drv`) already provides full Windows MIDI API support, making additional MIDI code in WineASIO redundant.
 
 ### Troubleshooting MIDI
 
-**MIDI ports don't appear:**
-- Ensure WineASIO is actively being used by an application
-- Check if JACK is running: `jack_lsp`
-- Verify JACK MIDI functions are loaded (check Wine debug output)
+**MIDI devices not appearing in DAW:**
+- Ensure `a2jmidid -e` is running
+- Check connections with `jack_lsp` and `jack_connect`
+- Verify the device appears in `aconnect -l` (ALSA MIDI)
 
 **"device already open" error in Wine:**
-- This usually means you're trying to open an a2jmidid bridge port
-- Use hardware ports directly (e.g., "M4 - M4 MIDI 1") instead of "a2jmidid - port"
+- Close other applications using the MIDI device
+- Try using the device through `a2jmidid` instead of direct ALSA access
 
 ## Control Panel / Settings GUI
 

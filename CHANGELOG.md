@@ -7,7 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-## [1.4.2] - 2026-01-21
+## [1.4.4] - 2025-01-31
+
+### Removed
+
+- **JACK MIDI ports** - Removed unused MIDI infrastructure from WineASIO
+  - The `WineASIO:midi_in` and `WineASIO:midi_out` JACK ports were non-functional placeholders
+  - They were not connected to the Windows MIDI API, so DAWs could not use them
+  - Wine's built-in `winealsa.drv` already provides full MIDI support via ALSA
+  - Use `a2jmidid -e` to bridge ALSA MIDI devices to JACK for MIDI routing
+
+### Changed
+
+- **README.md**: Updated MIDI section to explain proper MIDI usage with Wine
+  - Documented that Wine's `winealsa.drv` handles MIDI (not WineASIO)
+  - Added instructions for using `a2jmidid` to bridge MIDI to JACK
+
+---
+
+## [1.4.2] - 2025-01-21
 
 ### Fixed
 
@@ -107,9 +125,10 @@ Successfully tested with:
   - `unixlib.h` - Interface definitions
 - Modern `__wine_unix_call` interface for PE↔Unix communication
 
-#### JACK MIDI
-- JACK MIDI port creation: `WineASIO:midi_in` and `WineASIO:midi_out`
-- Automatic MIDI port registration when connecting to JACK
+#### JACK MIDI (removed in 1.4.3)
+- ~~JACK MIDI port creation: `WineASIO:midi_in` and `WineASIO:midi_out`~~
+- ~~Automatic MIDI port registration when connecting to JACK~~
+- Note: Removed in 1.4.3 - use Wine's `winealsa.drv` + `a2jmidid` for MIDI
 
 #### Settings GUI
 - Native Linux settings panel with PyQt5/PyQt6

@@ -132,50 +132,12 @@ static void (*pjack_port_get_latency_range)(jack_port_t*, jack_latency_callback_
 static jack_transport_state_t (*pjack_transport_query)(const jack_client_t*, jack_position_t*);
 
 #define JACK_DEFAULT_AUDIO_TYPE "32 bit float mono audio"
-#define JACK_DEFAULT_MIDI_TYPE  "8 bit raw midi"
 #define JackPortIsInput  0x1
 #define JackPortIsOutput 0x2
 #define JackPortIsPhysical 0x4
 
 #define MAX_CHANNELS 128
 #define MAX_NAME_LENGTH 64
-
-/* JACK MIDI event structure */
-typedef struct {
-    jack_nframes_t time;
-    size_t size;
-    unsigned char *buffer;
-} jack_midi_event_t;
-
-/* JACK MIDI function pointers */
-static jack_nframes_t (*pjack_midi_get_event_count)(void*);
-static int (*pjack_midi_event_get)(jack_midi_event_t*, void*, jack_nframes_t);
-static void (*pjack_midi_clear_buffer)(void*);
-static int (*pjack_midi_event_write)(void*, jack_nframes_t, const unsigned char*, size_t);
-
-/* MIDI ringbuffer for thread-safe MIDI event passing */
-#define MIDI_RINGBUFFER_SIZE 256
-#define MAX_MIDI_EVENT_SIZE 256
-
-typedef struct {
-    unsigned char data[MAX_MIDI_EVENT_SIZE];
-    size_t size;
-    jack_nframes_t time;
-} MidiEvent;
-
-typedef struct {
-    MidiEvent events[MIDI_RINGBUFFER_SIZE];
-    volatile int read_pos;
-    volatile int write_pos;
-} MidiRingBuffer;
-
-/* MIDI port state */
-typedef struct {
-    jack_port_t *port;
-    char name[MAX_NAME_LENGTH];
-    BOOL active;
-    MidiRingBuffer ringbuffer;
-} MidiChannel;
 
 /* Channel state */
 typedef struct {
@@ -234,10 +196,6 @@ typedef struct {
     BOOL fixed_bufsize;
     LONG preferred_bufsize;
     
-    /* JACK MIDI ports */
-    BOOL midi_enabled;
-    MidiChannel midi_input;
-    MidiChannel midi_output;
 } AsioStream;
 
 enum { Loaded = 0, Initialized, Prepared, Running };
@@ -294,11 +252,6 @@ static BOOL load_jack(void)
     
     #undef LOAD_SYM
     
-    /* JACK MIDI functions - load manually, optional */
-    pjack_midi_get_event_count = dlsym(jack_handle, "jack_midi_get_event_count");
-    pjack_midi_event_get = dlsym(jack_handle, "jack_midi_event_get");
-    pjack_midi_clear_buffer = dlsym(jack_handle, "jack_midi_clear_buffer");
-    pjack_midi_event_write = dlsym(jack_handle, "jack_midi_event_write");
     if (!pjack_client_open || !pjack_client_close) {
         ERR("JACK library missing critical symbols\n");
         dlclose(jack_handle);
@@ -319,61 +272,11 @@ static INT64 get_system_time(void)
     return (INT64)ts.tv_sec * 1000000000LL + ts.tv_nsec;
 }
 
-/* Helper: write MIDI event to ringbuffer */
-static void midi_ringbuffer_write(MidiRingBuffer *rb, const unsigned char *data, size_t size, jack_nframes_t time)
-{
-    int next_write = (rb->write_pos + 1) % MIDI_RINGBUFFER_SIZE;
-    if (next_write == rb->read_pos) {
-        /* Buffer full, drop event */
-        return;
-    }
-    
-    if (size > MAX_MIDI_EVENT_SIZE) size = MAX_MIDI_EVENT_SIZE;
-    
-    memcpy(rb->events[rb->write_pos].data, data, size);
-    rb->events[rb->write_pos].size = size;
-    rb->events[rb->write_pos].time = time;
-    rb->write_pos = next_write;
-}
-
 /* JACK process callback - runs in realtime thread */
 static int jack_process_callback(jack_nframes_t nframes, void *arg)
 {
     AsioStream *stream = (AsioStream *)arg;
     int i;
-    
-    /* Process JACK MIDI input - always, even when audio not running */
-    if (stream->midi_enabled && stream->midi_input.port && pjack_midi_get_event_count) {
-        void *midi_buf = pjack_port_get_buffer(stream->midi_input.port, nframes);
-        if (midi_buf) {
-            jack_nframes_t event_count = pjack_midi_get_event_count(midi_buf);
-            for (jack_nframes_t j = 0; j < event_count; j++) {
-                jack_midi_event_t event;
-                if (pjack_midi_event_get(&event, midi_buf, j) == 0) {
-                    midi_ringbuffer_write(&stream->midi_input.ringbuffer,
-                                         event.buffer, event.size, event.time);
-                }
-            }
-        }
-    }
-    
-    /* Process JACK MIDI output */
-    if (stream->midi_enabled && stream->midi_output.port && pjack_midi_clear_buffer) {
-        void *midi_buf = pjack_port_get_buffer(stream->midi_output.port, nframes);
-        if (midi_buf) {
-            pjack_midi_clear_buffer(midi_buf);
-            
-            /* Write pending MIDI events from ringbuffer */
-            MidiRingBuffer *rb = &stream->midi_output.ringbuffer;
-            while (rb->read_pos != rb->write_pos) {
-                MidiEvent *ev = &rb->events[rb->read_pos];
-                if (pjack_midi_event_write) {
-                    pjack_midi_event_write(midi_buf, ev->time % nframes, ev->data, ev->size);
-                }
-                rb->read_pos = (rb->read_pos + 1) % MIDI_RINGBUFFER_SIZE;
-            }
-        }
-    }
     
     if (stream->state != Running) {
         /* Output silence */
@@ -552,36 +455,6 @@ static NTSTATUS asio_init(void *args)
         stream->outputs[i].active = FALSE;
     }
     
-    /* Register JACK MIDI ports */
-    stream->midi_enabled = FALSE;
-    if (pjack_midi_get_event_count && pjack_midi_clear_buffer) {
-        /* MIDI input port */
-        snprintf(stream->midi_input.name, MAX_NAME_LENGTH, "midi_in");
-        stream->midi_input.port = pjack_port_register(stream->client,
-            stream->midi_input.name, JACK_DEFAULT_MIDI_TYPE, JackPortIsInput, 0);
-        stream->midi_input.active = TRUE;
-        stream->midi_input.ringbuffer.read_pos = 0;
-        stream->midi_input.ringbuffer.write_pos = 0;
-        
-        /* MIDI output port */
-        snprintf(stream->midi_output.name, MAX_NAME_LENGTH, "midi_out");
-        stream->midi_output.port = pjack_port_register(stream->client,
-            stream->midi_output.name, JACK_DEFAULT_MIDI_TYPE, JackPortIsOutput, 0);
-        stream->midi_output.active = TRUE;
-        stream->midi_output.ringbuffer.read_pos = 0;
-        stream->midi_output.ringbuffer.write_pos = 0;
-        
-        if (stream->midi_input.port && stream->midi_output.port) {
-            stream->midi_enabled = TRUE;
-            TRACE("JACK MIDI ports registered: %s, %s\n",
-                  stream->midi_input.name, stream->midi_output.name);
-        } else {
-            WARN("Failed to register JACK MIDI ports\n");
-        }
-    } else {
-        TRACE("JACK MIDI functions not available\n");
-    }
-    
     /* Get physical ports */
     stream->jack_input_ports = pjack_get_ports(stream->client, NULL, NULL,
         JackPortIsPhysical | JackPortIsOutput);
@@ -670,12 +543,6 @@ static NTSTATUS asio_exit(void *args)
             if (stream->outputs[i].port)
                 pjack_port_unregister(stream->client, stream->outputs[i].port);
         }
-        
-        /* Unregister MIDI ports */
-        if (stream->midi_input.port)
-            pjack_port_unregister(stream->client, stream->midi_input.port);
-        if (stream->midi_output.port)
-            pjack_port_unregister(stream->client, stream->midi_output.port);
         
         pjack_client_close(stream->client);
     }
