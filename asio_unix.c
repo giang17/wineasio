@@ -206,8 +206,7 @@ static BOOL jack_loaded = FALSE;
 __attribute__((constructor))
 static void wineasio_unix_init(void)
 {
-    /* Library loaded - minimal output for production */
-    TRACE("Unix library loaded\n");
+    /* Library loaded */
 }
 
 /* Load JACK library */
@@ -260,7 +259,6 @@ static BOOL load_jack(void)
     }
     
     jack_loaded = TRUE;
-    TRACE("JACK library loaded successfully\n");
     return TRUE;
 }
 
@@ -337,7 +335,6 @@ static int jack_buffer_size_callback(jack_nframes_t nframes, void *arg)
 {
     AsioStream *stream = (AsioStream *)arg;
     
-    TRACE("Buffer size changed to %u\n", nframes);
     stream->buffer_size = nframes;
     
     pthread_mutex_lock(&stream->callback_lock);
@@ -351,8 +348,6 @@ static int jack_buffer_size_callback(jack_nframes_t nframes, void *arg)
 static int jack_sample_rate_callback(jack_nframes_t nframes, void *arg)
 {
     AsioStream *stream = (AsioStream *)arg;
-    
-    TRACE("Sample rate changed to %u\n", nframes);
     
     pthread_mutex_lock(&stream->callback_lock);
     stream->sample_rate_changed = TRUE;
@@ -390,8 +385,6 @@ static NTSTATUS asio_init(void *args)
     jack_status_t status;
     jack_options_t options;
     int i;
-    
-    TRACE("asio_init called\n");
     
     if (!load_jack()) {
         ERR("Could not load JACK library\n");
@@ -518,7 +511,6 @@ static NTSTATUS asio_init(void *args)
 
 static NTSTATUS asio_exit(void *args)
 {
-    TRACE("%s called\n", __func__);
     struct asio_exit_params *params = args;
     AsioStream *stream = handle_to_stream(params->handle);
     int i;
@@ -527,8 +519,6 @@ static NTSTATUS asio_exit(void *args)
         params->result = ASE_InvalidParameter;
         return STATUS_SUCCESS;
     }
-    
-    TRACE("Shutting down WineASIO\n");
     
     /* Deactivate and close */
     if (stream->client) {
@@ -571,12 +561,9 @@ static NTSTATUS asio_exit(void *args)
 
 static NTSTATUS asio_start(void *args)
 {
-    TRACE("%s called\n", __func__);
     struct asio_start_params *params = args;
     AsioStream *stream = handle_to_stream(params->handle);
     int i;
-    
-    TRACE("asio_start called: stream=%p, state=%d\n", stream, stream ? stream->state : -1);
     
     if (!stream || stream->state != Prepared) {
         ERR("Invalid stream or state for start: stream=%p, state=%d\n", stream, stream ? stream->state : -1);
@@ -603,15 +590,12 @@ static NTSTATUS asio_start(void *args)
     
     stream->state = Running;
     params->result = ASE_OK;
-    
-    TRACE("WineASIO started\n");
-    
+
     return STATUS_SUCCESS;
 }
 
 static NTSTATUS asio_stop(void *args)
 {
-    TRACE("%s called\n", __func__);
     struct asio_stop_params *params = args;
     AsioStream *stream = handle_to_stream(params->handle);
     
@@ -622,15 +606,12 @@ static NTSTATUS asio_stop(void *args)
     
     stream->state = Prepared;
     params->result = ASE_OK;
-    
-    TRACE("WineASIO stopped\n");
-    
+
     return STATUS_SUCCESS;
 }
 
 static NTSTATUS asio_get_channels(void *args)
 {
-    TRACE("%s called\n", __func__);
     struct asio_get_channels_params *params = args;
     AsioStream *stream = handle_to_stream(params->handle);
     
@@ -648,7 +629,6 @@ static NTSTATUS asio_get_channels(void *args)
 
 static NTSTATUS asio_get_latencies(void *args)
 {
-    TRACE("%s called\n", __func__);
     struct asio_get_latencies_params *params = args;
     AsioStream *stream = handle_to_stream(params->handle);
     jack_latency_range_t range;
@@ -681,7 +661,6 @@ static NTSTATUS asio_get_latencies(void *args)
 
 static NTSTATUS asio_get_buffer_size(void *args)
 {
-    TRACE("%s called\n", __func__);
     struct asio_get_buffer_size_params *params = args;
     AsioStream *stream = handle_to_stream(params->handle);
     
@@ -709,7 +688,6 @@ static NTSTATUS asio_get_buffer_size(void *args)
 
 static NTSTATUS asio_can_sample_rate(void *args)
 {
-    TRACE("%s called\n", __func__);
     struct asio_can_sample_rate_params *params = args;
     AsioStream *stream = handle_to_stream(params->handle);
     
@@ -730,7 +708,6 @@ static NTSTATUS asio_can_sample_rate(void *args)
 
 static NTSTATUS asio_get_sample_rate(void *args)
 {
-    TRACE("%s called\n", __func__);
     struct asio_get_sample_rate_params *params = args;
     AsioStream *stream = handle_to_stream(params->handle);
     
@@ -747,7 +724,6 @@ static NTSTATUS asio_get_sample_rate(void *args)
 
 static NTSTATUS asio_set_sample_rate(void *args)
 {
-    TRACE("%s called\n", __func__);
     struct asio_set_sample_rate_params *params = args;
     AsioStream *stream = handle_to_stream(params->handle);
     
@@ -768,7 +744,6 @@ static NTSTATUS asio_set_sample_rate(void *args)
 
 static NTSTATUS asio_get_channel_info(void *args)
 {
-    TRACE("%s called\n", __func__);
     struct asio_get_channel_info_params *params = args;
     AsioStream *stream = handle_to_stream(params->handle);
     int channel = params->info.channel;
@@ -812,9 +787,6 @@ static NTSTATUS asio_create_buffers(void *args)
     AsioStream *stream = handle_to_stream(params->handle);
     struct asio_buffer_info *infos = params->buffer_infos;
     int i, j;
-    
-    TRACE("asio_create_buffers: num_channels=%d, buffer_size=%d\n", 
-          params->num_channels, params->buffer_size);
     
     if (!stream || stream->state < Initialized) {
         ERR("Invalid stream or state for CreateBuffers\n");
@@ -895,10 +867,7 @@ static NTSTATUS asio_create_buffers(void *args)
     
     stream->state = Prepared;
     params->result = ASE_OK;
-    
-    TRACE("Buffers created: %d channels, %d samples\n",
-          params->num_channels, stream->buffer_size);
-    
+
     return STATUS_SUCCESS;
 }
 
@@ -931,9 +900,7 @@ static NTSTATUS asio_dispose_buffers(void *args)
     
     stream->state = Initialized;
     params->result = ASE_OK;
-    
-    TRACE("Buffers disposed\n");
-    
+
     return STATUS_SUCCESS;
 }
 
@@ -994,10 +961,6 @@ static NTSTATUS asio_get_callback(void *args)
     params->resync_request = FALSE;
     params->latency_changed = stream->latency_changed;
     
-    /* Clear pending flags and log only on actual buffer switch */
-    if (stream->buffer_switch_pending) {
-        TRACE("Buffer switch ready, index=%d\n", params->buffer_index);
-    }
     stream->buffer_switch_pending = FALSE;
     stream->sample_rate_changed = FALSE;
     stream->reset_request = FALSE;
@@ -1022,8 +985,6 @@ static NTSTATUS asio_control_panel(void *args)
 {
     struct asio_control_panel_params *params = args;
     pid_t pid;
-    
-    TRACE("Control panel requested - launching wineasio-settings\n");
     
     pid = fork();
     if (pid == 0) {
@@ -1084,7 +1045,6 @@ static NTSTATUS asio_future(void *args)
         break;
         
     default:
-        TRACE("Unknown future selector: %d\n", params->selector);
         params->result = ASE_NotPresent;
         break;
     }

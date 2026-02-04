@@ -134,19 +134,6 @@ static inline NTSTATUS wine_unix_call(unixlib_handle_t handle, unsigned int code
     return p__wine_unix_call_dispatcher(handle, code, args);
 }
 
-/* GUID to string helper - replacement for wine_dbgstr_guid */
-static const char *debugstr_guid(const GUID *guid)
-{
-    static char buf[64];
-    if (!guid) return "(null)";
-    snprintf(buf, sizeof(buf), "{%08lx-%04x-%04x-%02x%02x-%02x%02x%02x%02x%02x%02x}",
-             (unsigned long)guid->Data1, guid->Data2, guid->Data3,
-             guid->Data4[0], guid->Data4[1], guid->Data4[2], guid->Data4[3],
-             guid->Data4[4], guid->Data4[5], guid->Data4[6], guid->Data4[7]);
-    return buf;
-}
-#define wine_dbgstr_guid debugstr_guid
-
 /* Initialize Wine unix call interface - must be called from DllMain */
 static BOOL init_wine_unix_call(HINSTANCE hInstDLL)
 {
@@ -211,8 +198,6 @@ static BOOL init_wine_unix_call(HINSTANCE hInstDLL)
     }
     
     DBG_STDERR("init_wine_unix_call: SUCCESS - unix handle = 0x%llx", (unsigned long long)wineasio_unix_handle);
-    TRACE("Wine unix call interface initialized, handle=%llx\n", 
-          (unsigned long long)wineasio_unix_handle);
     return TRUE;
 }
 
@@ -389,9 +374,6 @@ static void read_config(IWineASIO *This)
         RegCloseKey(hkey);
     }
     
-    TRACE("Config: inputs=%d outputs=%d bufsize=%d fixed=%d autoconnect=%d name=%s\n",
-          This->config.num_inputs, This->config.num_outputs, This->config.preferred_bufsize,
-          This->config.fixed_bufsize, This->config.autoconnect, This->config.client_name);
 }
 
 /* Callback polling thread - polls Unix side for buffer switches */
@@ -399,8 +381,6 @@ static DWORD WINAPI callback_thread_proc(LPVOID arg)
 {
     IWineASIO *This = (IWineASIO *)arg;
     struct asio_get_callback_params params;
-    
-    TRACE("Callback thread started\n");
     
     while (!This->stop_callback_thread) {
         params.handle = This->handle;
@@ -410,21 +390,18 @@ static DWORD WINAPI callback_thread_proc(LPVOID arg)
         if (params.result == ASE_OK && params.buffer_switch_ready && This->callbacks) {
             /* Handle sample rate change */
             if (params.sample_rate_changed) {
-                TRACE("Sample rate changed to %f\n", params.new_sample_rate);
                 This->sample_rate = params.new_sample_rate;
                 This->callbacks->sampleRateDidChange(params.new_sample_rate);
             }
             
             /* Handle reset request */
             if (params.reset_request) {
-                TRACE("Reset requested\n");
                 This->callbacks->asioMessage(1 /* kAsioSelectorSupported */, 3 /* kAsioResetRequest */, NULL, NULL);
                 This->callbacks->asioMessage(3 /* kAsioResetRequest */, 0, NULL, NULL);
             }
             
             /* Handle latency change */
             if (params.latency_changed) {
-                TRACE("Latency changed\n");
                 This->callbacks->asioMessage(1, 6 /* kAsioLatenciesChanged */, NULL, NULL);
                 This->callbacks->asioMessage(6, 0, NULL, NULL);
             }
@@ -450,15 +427,12 @@ static DWORD WINAPI callback_thread_proc(LPVOID arg)
         Sleep(1);
     }
     
-    TRACE("Callback thread stopped\n");
     return 0;
 }
 
 /* IUnknown methods */
 static HRESULT STDMETHODCALLTYPE QueryInterface(LPWINEASIO iface, REFIID riid, void **ppvObject)
 {
-    TRACE("iface=%p riid=%s\n", iface, wine_dbgstr_guid(riid));
-    
     if (!ppvObject)
         return E_POINTER;
     
@@ -476,7 +450,6 @@ static ULONG STDMETHODCALLTYPE AddRef(LPWINEASIO iface)
 {
     IWineASIO *This = (IWineASIO *)iface;
     ULONG ref = InterlockedIncrement(&This->ref);
-    TRACE("iface=%p ref=%u\n", iface, ref);
     return ref;
 }
 
@@ -484,8 +457,6 @@ static ULONG STDMETHODCALLTYPE Release(LPWINEASIO iface)
 {
     IWineASIO *This = (IWineASIO *)iface;
     ULONG ref = InterlockedDecrement(&This->ref);
-    
-    TRACE("iface=%p ref=%u\n", iface, ref);
     
     if (ref == 0) {
         /* Stop callback thread */
@@ -513,8 +484,6 @@ LONG STDMETHODCALLTYPE Init(LPWINEASIO iface, void *sysRef)
     IWineASIO *This = (IWineASIO *)iface;
     struct asio_init_params params;
     
-    TRACE("iface=%p sysRef=%p\n", iface, sysRef);
-    
     /* Read config from registry */
     read_config(This);
     
@@ -534,27 +503,21 @@ LONG STDMETHODCALLTYPE Init(LPWINEASIO iface, void *sysRef)
     This->num_outputs = params.output_channels;
     This->sample_rate = params.sample_rate;
     
-    TRACE("Initialized: handle=%llu inputs=%d outputs=%d rate=%f\n",
-          (unsigned long long)This->handle, This->num_inputs, This->num_outputs, This->sample_rate);
-    
     return 1;  /* Success */
 }
 
 void STDMETHODCALLTYPE GetDriverName(LPWINEASIO iface, char *name)
 {
-    TRACE("iface=%p name=%p\n", iface, name);
     strcpy(name, "WineASIO");
 }
 
 LONG STDMETHODCALLTYPE GetDriverVersion(LPWINEASIO iface)
 {
-    TRACE("iface=%p\n", iface);
     return WINEASIO_VERSION;
 }
 
 void STDMETHODCALLTYPE GetErrorMessage(LPWINEASIO iface, char *string)
 {
-    TRACE("iface=%p string=%p\n", iface, string);
     strcpy(string, "No error");
 }
 
@@ -562,9 +525,7 @@ LONG STDMETHODCALLTYPE Start(LPWINEASIO iface)
 {
     IWineASIO *This = (IWineASIO *)iface;
     struct asio_start_params params = { .handle = This->handle };
-    
-    TRACE("iface=%p\n", iface);
-    
+
     UNIX_CALL(asio_start, &params);
     
     if (params.result != ASE_OK) {
@@ -596,9 +557,7 @@ LONG STDMETHODCALLTYPE Stop(LPWINEASIO iface)
 {
     IWineASIO *This = (IWineASIO *)iface;
     struct asio_stop_params params = { .handle = This->handle };
-    
-    TRACE("iface=%p\n", iface);
-    
+
     /* Stop callback thread */
     if (This->callback_thread) {
         This->stop_callback_thread = TRUE;
@@ -616,9 +575,7 @@ LONG STDMETHODCALLTYPE GetChannels(LPWINEASIO iface, LONG *numInputChannels, LON
 {
     IWineASIO *This = (IWineASIO *)iface;
     struct asio_get_channels_params params = { .handle = This->handle };
-    
-    TRACE("iface=%p\n", iface);
-    
+
     if (!numInputChannels || !numOutputChannels)
         return ASE_InvalidParameter;
     
@@ -634,9 +591,7 @@ LONG STDMETHODCALLTYPE GetLatencies(LPWINEASIO iface, LONG *inputLatency, LONG *
 {
     IWineASIO *This = (IWineASIO *)iface;
     struct asio_get_latencies_params params = { .handle = This->handle };
-    
-    TRACE("iface=%p\n", iface);
-    
+
     if (!inputLatency || !outputLatency)
         return ASE_InvalidParameter;
     
@@ -652,9 +607,7 @@ LONG STDMETHODCALLTYPE GetBufferSize(LPWINEASIO iface, LONG *minSize, LONG *maxS
 {
     IWineASIO *This = (IWineASIO *)iface;
     struct asio_get_buffer_size_params params = { .handle = This->handle };
-    
-    TRACE("iface=%p\n", iface);
-    
+
     UNIX_CALL(asio_get_buffer_size, &params);
     
     if (minSize) *minSize = params.min_size;
@@ -669,9 +622,7 @@ LONG STDMETHODCALLTYPE CanSampleRate(LPWINEASIO iface, double sampleRate)
 {
     IWineASIO *This = (IWineASIO *)iface;
     struct asio_can_sample_rate_params params = { .handle = This->handle, .sample_rate = sampleRate };
-    
-    TRACE("iface=%p rate=%f\n", iface, sampleRate);
-    
+
     UNIX_CALL(asio_can_sample_rate, &params);
     
     return params.result;
@@ -681,9 +632,7 @@ LONG STDMETHODCALLTYPE GetSampleRate(LPWINEASIO iface, double *currentRate)
 {
     IWineASIO *This = (IWineASIO *)iface;
     struct asio_get_sample_rate_params params = { .handle = This->handle };
-    
-    TRACE("iface=%p\n", iface);
-    
+
     if (!currentRate)
         return ASE_InvalidParameter;
     
@@ -699,9 +648,7 @@ LONG STDMETHODCALLTYPE SetSampleRate(LPWINEASIO iface, double sampleRate)
 {
     IWineASIO *This = (IWineASIO *)iface;
     struct asio_set_sample_rate_params params = { .handle = This->handle, .sample_rate = sampleRate };
-    
-    TRACE("iface=%p rate=%f\n", iface, sampleRate);
-    
+
     UNIX_CALL(asio_set_sample_rate, &params);
     
     if (params.result == ASE_OK)
@@ -712,8 +659,6 @@ LONG STDMETHODCALLTYPE SetSampleRate(LPWINEASIO iface, double sampleRate)
 
 LONG STDMETHODCALLTYPE GetClockSources(LPWINEASIO iface, void *clocks, LONG *numSources)
 {
-    TRACE("iface=%p\n", iface);
-    
     /* We only have one clock source - JACK */
     if (numSources)
         *numSources = 0;
@@ -723,8 +668,6 @@ LONG STDMETHODCALLTYPE GetClockSources(LPWINEASIO iface, void *clocks, LONG *num
 
 LONG STDMETHODCALLTYPE SetClockSource(LPWINEASIO iface, LONG reference)
 {
-    TRACE("iface=%p ref=%d\n", iface, reference);
-    
     /* Only one clock source, ignore */
     return ASE_OK;
 }
@@ -754,8 +697,6 @@ LONG STDMETHODCALLTYPE GetChannelInfo(LPWINEASIO iface, ASIOChannelInfo *info)
     IWineASIO *This = (IWineASIO *)iface;
     struct asio_get_channel_info_params params;
     
-    TRACE("iface=%p channel=%d isInput=%d\n", iface, info->channel, info->isInput);
-    
     if (!info)
         return ASE_InvalidParameter;
     
@@ -783,8 +724,6 @@ LONG STDMETHODCALLTYPE CreateBuffers(LPWINEASIO iface, ASIOBufferInfo *bufferInf
     int i;
     size_t buffer_bytes;
     
-    TRACE("iface=%p numChannels=%d bufferSize=%d\n", iface, numChannels, bufferSize);
-    
     if (!bufferInfos || !callbacks || numChannels <= 0)
         return ASE_InvalidParameter;
     
@@ -801,8 +740,6 @@ LONG STDMETHODCALLTYPE CreateBuffers(LPWINEASIO iface, ASIOBufferInfo *bufferInf
         if (callbacks->asioMessage(1, 15 /* kAsioSupportsTimeCode */, NULL, NULL) == 1)
             This->can_time_code = TRUE;
     }
-    
-    TRACE("time_info_mode=%d can_time_code=%d\n", This->time_info_mode, This->can_time_code);
     
     /* Prepare Unix call */
     unix_infos = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, numChannels * sizeof(*unix_infos));
@@ -885,9 +822,7 @@ LONG STDMETHODCALLTYPE DisposeBuffers(LPWINEASIO iface)
 {
     IWineASIO *This = (IWineASIO *)iface;
     struct asio_dispose_buffers_params params = { .handle = This->handle };
-    
-    TRACE("iface=%p\n", iface);
-    
+
     UNIX_CALL(asio_dispose_buffers, &params);
     
     This->callbacks = NULL;
@@ -899,9 +834,7 @@ LONG STDMETHODCALLTYPE ControlPanel(LPWINEASIO iface)
 {
     IWineASIO *This = (IWineASIO *)iface;
     struct asio_control_panel_params params = { .handle = This->handle };
-    
-    TRACE("iface=%p\n", iface);
-    
+
     UNIX_CALL(asio_control_panel, &params);
     
     return params.result;
@@ -911,9 +844,7 @@ LONG STDMETHODCALLTYPE Future(LPWINEASIO iface, LONG selector, void *opt)
 {
     IWineASIO *This = (IWineASIO *)iface;
     struct asio_future_params params;
-    
-    TRACE("iface=%p selector=%d\n", iface, selector);
-    
+
     memset(&params, 0, sizeof(params));
     params.handle = This->handle;
     params.selector = selector;
@@ -996,48 +927,18 @@ HRESULT WINAPI WineASIOCreateInstance(REFIID riid, LPVOID *ppobj)
 {
     IWineASIO *pAsio;
     
-    TRACE("riid=%s ppobj=%p\n", wine_dbgstr_guid(riid), ppobj);
-    
     if (!ppobj)
         return E_POINTER;
-    
+
     *ppobj = NULL;
-    
+
     pAsio = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, sizeof(*pAsio));
     if (!pAsio)
         return E_OUTOFMEMORY;
-    
+
     pAsio->lpVtbl = &WineASIO_Vtbl;
     pAsio->ref = 1;
-    
-    /* DEBUG: Dump vtable function pointers */
-    TRACE("=== VTABLE DUMP (pAsio=%p, lpVtbl=%p) ===\n", pAsio, pAsio->lpVtbl);
-    TRACE("vtable[0x00] QueryInterface   = %p\n", (void*)WineASIO_Vtbl.QueryInterface);
-    TRACE("vtable[0x04] AddRef            = %p\n", (void*)WineASIO_Vtbl.AddRef);
-    TRACE("vtable[0x08] Release           = %p\n", (void*)WineASIO_Vtbl.Release);
-    TRACE("vtable[0x0C] Init              = %p\n", (void*)WineASIO_Vtbl.Init);
-    TRACE("vtable[0x10] GetDriverName     = %p\n", (void*)WineASIO_Vtbl.GetDriverName);
-    TRACE("vtable[0x14] GetDriverVersion  = %p\n", (void*)WineASIO_Vtbl.GetDriverVersion);
-    TRACE("vtable[0x18] GetErrorMessage   = %p\n", (void*)WineASIO_Vtbl.GetErrorMessage);
-    TRACE("vtable[0x1C] Start             = %p\n", (void*)WineASIO_Vtbl.Start);
-    TRACE("vtable[0x20] Stop              = %p\n", (void*)WineASIO_Vtbl.Stop);
-    TRACE("vtable[0x24] GetChannels       = %p\n", (void*)WineASIO_Vtbl.GetChannels);
-    TRACE("vtable[0x28] GetLatencies      = %p\n", (void*)WineASIO_Vtbl.GetLatencies);
-    TRACE("vtable[0x2C] GetBufferSize     = %p\n", (void*)WineASIO_Vtbl.GetBufferSize);
-    TRACE("vtable[0x30] CanSampleRate     = %p\n", (void*)WineASIO_Vtbl.CanSampleRate);
-    TRACE("vtable[0x34] GetSampleRate     = %p\n", (void*)WineASIO_Vtbl.GetSampleRate);
-    TRACE("vtable[0x38] SetSampleRate     = %p\n", (void*)WineASIO_Vtbl.SetSampleRate);
-    TRACE("vtable[0x3C] GetClockSources   = %p\n", (void*)WineASIO_Vtbl.GetClockSources);
-    TRACE("vtable[0x40] SetClockSource    = %p\n", (void*)WineASIO_Vtbl.SetClockSource);
-    TRACE("vtable[0x44] GetSamplePosition = %p\n", (void*)WineASIO_Vtbl.GetSamplePosition);
-    TRACE("vtable[0x48] GetChannelInfo    = %p\n", (void*)WineASIO_Vtbl.GetChannelInfo);
-    TRACE("vtable[0x4C] CreateBuffers     = %p\n", (void*)WineASIO_Vtbl.CreateBuffers);
-    TRACE("vtable[0x50] DisposeBuffers    = %p\n", (void*)WineASIO_Vtbl.DisposeBuffers);
-    TRACE("vtable[0x54] ControlPanel      = %p\n", (void*)WineASIO_Vtbl.ControlPanel);
-    TRACE("vtable[0x58] Future            = %p\n", (void*)WineASIO_Vtbl.Future);
-    TRACE("vtable[0x5C] OutputReady       = %p\n", (void*)WineASIO_Vtbl.OutputReady);
-    TRACE("=== END VTABLE DUMP ===\n");
-    
+
     *ppobj = pAsio;
     return S_OK;
 }
@@ -1103,8 +1004,7 @@ static IClassFactoryImpl WINEASIO_CF = { &CF_Vtbl, 1 };
 HRESULT WINAPI DllGetClassObject(REFCLSID rclsid, REFIID riid, void **ppv)
 {
     DBG_STDERR(">>> DllGetClassObject called");
-    TRACE("rclsid=%s riid=%s ppv=%p\n", wine_dbgstr_guid(rclsid), wine_dbgstr_guid(riid), ppv);
-    
+
     if (ppv == NULL)
         return E_INVALIDARG;
     
@@ -1143,8 +1043,6 @@ HRESULT WINAPI DllRegisterServer(void)
     const char *dll_name = "wineasio.dll";
 #endif
     
-    TRACE("Registering WineASIO\n");
-    
     /* Register COM class under HKEY_CLASSES_ROOT\CLSID\{...} */
     rc = RegCreateKeyExA(HKEY_CLASSES_ROOT, 
                          "CLSID\\{48D0C522-BFCC-45CC-8B84-17F25F33E6E8}",
@@ -1181,7 +1079,6 @@ HRESULT WINAPI DllRegisterServer(void)
         RegCloseKey(hkey);
     }
     
-    TRACE("WineASIO registered successfully\n");
     return S_OK;
 }
 
@@ -1190,8 +1087,6 @@ HRESULT WINAPI DllRegisterServer(void)
  */
 HRESULT WINAPI DllUnregisterServer(void)
 {
-    TRACE("Unregistering WineASIO\n");
-    
     /* Delete ASIO driver key */
     RegDeleteKeyA(HKEY_LOCAL_MACHINE, "Software\\ASIO\\WineASIO");
     
@@ -1199,7 +1094,6 @@ HRESULT WINAPI DllUnregisterServer(void)
     RegDeleteKeyA(HKEY_CLASSES_ROOT, "CLSID\\{48D0C522-BFCC-45CC-8B84-17F25F33E6E8}\\InprocServer32");
     RegDeleteKeyA(HKEY_CLASSES_ROOT, "CLSID\\{48D0C522-BFCC-45CC-8B84-17F25F33E6E8}");
     
-    TRACE("WineASIO unregistered\n");
     return S_OK;
 }
 
@@ -1208,7 +1102,6 @@ BOOL WINAPI DllMain(HINSTANCE hInstDLL, DWORD fdwReason, LPVOID lpvReserved)
     /* Very first thing - output debug before anything else */
     EARLY_DBG("DllMain entered");
     
-    TRACE("hInstDLL=%p fdwReason=%lx lpvReserved=%p\n", hInstDLL, fdwReason, lpvReserved);
     DBG_STDERR("DllMain: hInstDLL=%p fdwReason=%lx", hInstDLL, fdwReason);
     
     switch (fdwReason) {
