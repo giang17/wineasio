@@ -33,6 +33,8 @@
 #include <limits.h>
 #include <unistd.h>
 #include <sys/mman.h>
+#include <sys/eventfd.h>
+#include <poll.h>
 #include <pthread.h>
 #include <dlfcn.h>
 
@@ -130,6 +132,7 @@ static int (*pjack_set_sample_rate_callback)(jack_client_t*, int (*)(jack_nframe
 static int (*pjack_set_latency_callback)(jack_client_t*, void (*)(jack_latency_callback_mode_t, void*), void*);
 static void (*pjack_port_get_latency_range)(jack_port_t*, jack_latency_callback_mode_t, jack_latency_range_t*);
 static jack_transport_state_t (*pjack_transport_query)(const jack_client_t*, jack_position_t*);
+static void (*pjack_on_shutdown)(jack_client_t*, void (*)(void*), void*);
 
 #define JACK_DEFAULT_AUDIO_TYPE "32 bit float mono audio"
 #define JackPortIsInput  0x1
@@ -180,22 +183,28 @@ typedef struct {
     LONG buffer_index;
     jack_default_audio_sample_t *callback_audio_buffer;
     
-    /* Callback notification (polled by PE side) */
-    pthread_mutex_t callback_lock;
-    BOOL buffer_switch_pending;
-    LONG pending_buffer_index;
-    INT64 sample_position;
-    INT64 system_time;
-    BOOL sample_rate_changed;
-    double new_sample_rate;
-    BOOL reset_request;
-    BOOL latency_changed;
+    /* Callback notification (polled by PE side)
+     * Fields written by JACK realtime thread use atomics to avoid
+     * mutex in the realtime path (mutex would cause priority inversion / xruns).
+     * Non-realtime callbacks (buffer_size, sample_rate, latency) still use the mutex. */
+    pthread_mutex_t callback_lock;          /* protects non-realtime fields only */
+    volatile LONG buffer_switch_pending;    /* written atomically by RT thread */
+    volatile LONG pending_buffer_index;     /* written atomically by RT thread */
+    volatile INT64 sample_position;         /* written atomically by RT thread */
+    volatile INT64 system_time;             /* written atomically by RT thread */
+    BOOL sample_rate_changed;               /* protected by callback_lock */
+    double new_sample_rate;                 /* protected by callback_lock */
+    BOOL reset_request;                     /* protected by callback_lock */
+    BOOL latency_changed;                   /* protected by callback_lock */
     
+    /* Event signaling (replaces Sleep-polling) */
+    int event_fd;                           /* eventfd for RT→PE notification */
+
     /* Config */
     BOOL autoconnect;
     BOOL fixed_bufsize;
     LONG preferred_bufsize;
-    
+
 } AsioStream;
 
 enum { Loaded = 0, Initialized, Prepared, Running };
@@ -248,7 +257,8 @@ static BOOL load_jack(void)
     LOAD_SYM(jack_set_latency_callback)
     LOAD_SYM(jack_port_get_latency_range)
     LOAD_SYM(jack_transport_query)
-    
+    LOAD_SYM(jack_on_shutdown)
+
     #undef LOAD_SYM
     
     if (!pjack_client_open || !pjack_client_close) {
@@ -314,16 +324,21 @@ static int jack_process_callback(jack_nframes_t nframes, void *arg)
         }
     }
     
-    /* Update sample position */
-    stream->sample_position += nframes;
-    stream->system_time = get_system_time();
-    
-    /* Signal buffer switch to PE side */
-    pthread_mutex_lock(&stream->callback_lock);
-    stream->pending_buffer_index = stream->buffer_index;
-    stream->buffer_switch_pending = TRUE;
-    pthread_mutex_unlock(&stream->callback_lock);
-    
+    /* Update sample position and time atomically (no mutex in RT thread!) */
+    __atomic_store_n(&stream->sample_position, stream->sample_position + nframes, __ATOMIC_RELAXED);
+    __atomic_store_n(&stream->system_time, get_system_time(), __ATOMIC_RELAXED);
+
+    /* Signal buffer switch to PE side — lock-free with release semantics.
+     * pending_buffer_index must be visible before buffer_switch_pending is set. */
+    __atomic_store_n(&stream->pending_buffer_index, stream->buffer_index, __ATOMIC_RELAXED);
+    __atomic_store_n(&stream->buffer_switch_pending, TRUE, __ATOMIC_RELEASE);
+
+    /* Wake PE-side wait thread via eventfd (RT-safe: eventfd_write is a single write syscall) */
+    {
+        uint64_t val = 1;
+        eventfd_write(stream->event_fd, val);
+    }
+
     /* Switch buffers */
     stream->buffer_index = stream->buffer_index ? 0 : 1;
     
@@ -367,6 +382,28 @@ static void jack_latency_callback(jack_latency_callback_mode_t mode, void *arg)
     pthread_mutex_lock(&stream->callback_lock);
     stream->latency_changed = TRUE;
     pthread_mutex_unlock(&stream->callback_lock);
+}
+
+/* JACK shutdown callback — called when the JACK server shuts down unexpectedly.
+ * Without this, WineASIO would deadlock or hang indefinitely. */
+static void jack_shutdown_callback(void *arg)
+{
+    AsioStream *stream = (AsioStream *)arg;
+
+    ERR("JACK server shut down!\n");
+    stream->state = Loaded;
+    stream->client = NULL;  /* client handle is invalid after shutdown */
+
+    /* Signal reset to PE side so the host can react */
+    pthread_mutex_lock(&stream->callback_lock);
+    stream->reset_request = TRUE;
+    pthread_mutex_unlock(&stream->callback_lock);
+
+    /* Wake the PE wait thread so it sees the reset */
+    if (stream->event_fd >= 0) {
+        uint64_t val = 1;
+        eventfd_write(stream->event_fd, val);
+    }
 }
 
 static AsioStream *handle_to_stream(asio_handle h)
@@ -430,8 +467,16 @@ static NTSTATUS asio_init(void *args)
     stream->sample_rate = pjack_get_sample_rate(stream->client);
     stream->buffer_size = pjack_get_buffer_size(stream->client);
     
-    /* Initialize mutex */
+    /* Initialize mutex and eventfd for callback signaling */
     pthread_mutex_init(&stream->callback_lock, NULL);
+    stream->event_fd = eventfd(0, EFD_NONBLOCK);
+    if (stream->event_fd < 0) {
+        ERR("Could not create eventfd: %s\n", strerror(errno));
+        pjack_client_close(stream->client);
+        free(stream);
+        params->result = ASE_HWMalfunction;
+        return STATUS_SUCCESS;
+    }
     
     /* Register ports */
     for (i = 0; i < stream->num_inputs; i++) {
@@ -467,6 +512,8 @@ static NTSTATUS asio_init(void *args)
     pjack_set_sample_rate_callback(stream->client, jack_sample_rate_callback, stream);
     if (pjack_set_latency_callback)
         pjack_set_latency_callback(stream->client, jack_latency_callback, stream);
+    if (pjack_on_shutdown)
+        pjack_on_shutdown(stream->client, jack_shutdown_callback, stream);
     
     /* Activate JACK client */
     if (pjack_activate(stream->client)) {
@@ -550,9 +597,11 @@ static NTSTATUS asio_exit(void *args)
         free(stream->outputs[i].audio_buffer);
     
     free(stream->callback_audio_buffer);
-    
+
     pthread_mutex_destroy(&stream->callback_lock);
-    
+    if (stream->event_fd >= 0)
+        close(stream->event_fd);
+
     free(stream);
     params->result = ASE_OK;
     
@@ -943,33 +992,91 @@ static NTSTATUS asio_get_callback(void *args)
         return STATUS_SUCCESS;
     }
     
-    pthread_mutex_lock(&stream->callback_lock);
-    
-    params->buffer_switch_ready = stream->buffer_switch_pending;
-    params->buffer_index = stream->pending_buffer_index;
+    /* Read RT-thread fields with acquire semantics (lock-free).
+     * buffer_switch_pending acts as the release/acquire synchronization point. */
+    params->buffer_switch_ready = __atomic_load_n(&stream->buffer_switch_pending, __ATOMIC_ACQUIRE);
+    params->buffer_index = __atomic_load_n(&stream->pending_buffer_index, __ATOMIC_RELAXED);
     params->direct_process = TRUE;
-    
+
     params->time_info.speed = 1.0;
-    params->time_info.system_time = stream->system_time;
-    params->time_info.sample_position = stream->sample_position;
+    params->time_info.system_time = __atomic_load_n(&stream->system_time, __ATOMIC_RELAXED);
+    params->time_info.sample_position = __atomic_load_n(&stream->sample_position, __ATOMIC_RELAXED);
     params->time_info.sample_rate = stream->sample_rate;
     params->time_info.flags = 0x7;  /* Valid flags */
-    
+
+    /* Clear pending flag atomically */
+    if (params->buffer_switch_ready)
+        __atomic_store_n(&stream->buffer_switch_pending, FALSE, __ATOMIC_RELAXED);
+
+    /* Non-RT fields still protected by mutex */
+    pthread_mutex_lock(&stream->callback_lock);
     params->sample_rate_changed = stream->sample_rate_changed;
     params->new_sample_rate = stream->new_sample_rate;
     params->reset_request = stream->reset_request;
     params->resync_request = FALSE;
     params->latency_changed = stream->latency_changed;
-    
-    stream->buffer_switch_pending = FALSE;
+
     stream->sample_rate_changed = FALSE;
     stream->reset_request = FALSE;
     stream->latency_changed = FALSE;
-    
     pthread_mutex_unlock(&stream->callback_lock);
     
     params->result = ASE_OK;
     
+    return STATUS_SUCCESS;
+}
+
+static NTSTATUS asio_wait_callback(void *args)
+{
+    struct asio_wait_callback_params *params = args;
+    AsioStream *stream = handle_to_stream(params->handle);
+
+    if (!stream) {
+        params->result = ASE_InvalidParameter;
+        return STATUS_SUCCESS;
+    }
+
+    /* Block until eventfd is signaled or timeout expires.
+     * This replaces the Sleep(1) polling loop on the PE side. */
+    {
+        struct pollfd pfd = { .fd = stream->event_fd, .events = POLLIN };
+        int ret = poll(&pfd, 1, params->timeout_ms > 0 ? params->timeout_ms : 10);
+
+        if (ret > 0) {
+            /* Consume the eventfd counter */
+            uint64_t val;
+            eventfd_read(stream->event_fd, &val);
+        }
+    }
+
+    /* Read RT-thread fields with acquire semantics */
+    params->buffer_switch_ready = __atomic_load_n(&stream->buffer_switch_pending, __ATOMIC_ACQUIRE);
+    params->buffer_index = __atomic_load_n(&stream->pending_buffer_index, __ATOMIC_RELAXED);
+    params->direct_process = TRUE;
+
+    params->time_info.speed = 1.0;
+    params->time_info.system_time = __atomic_load_n(&stream->system_time, __ATOMIC_RELAXED);
+    params->time_info.sample_position = __atomic_load_n(&stream->sample_position, __ATOMIC_RELAXED);
+    params->time_info.sample_rate = stream->sample_rate;
+    params->time_info.flags = 0x7;
+
+    if (params->buffer_switch_ready)
+        __atomic_store_n(&stream->buffer_switch_pending, FALSE, __ATOMIC_RELAXED);
+
+    /* Non-RT fields still protected by mutex */
+    pthread_mutex_lock(&stream->callback_lock);
+    params->sample_rate_changed = stream->sample_rate_changed;
+    params->new_sample_rate = stream->new_sample_rate;
+    params->reset_request = stream->reset_request;
+    params->resync_request = FALSE;
+    params->latency_changed = stream->latency_changed;
+
+    stream->sample_rate_changed = FALSE;
+    stream->reset_request = FALSE;
+    stream->latency_changed = FALSE;
+    pthread_mutex_unlock(&stream->callback_lock);
+
+    params->result = ASE_OK;
     return STATUS_SUCCESS;
 }
 
@@ -1072,6 +1179,7 @@ const unixlib_entry_t __wine_unix_call_funcs[] =
     asio_output_ready,
     asio_get_sample_position,
     asio_get_callback,
+    asio_wait_callback,
     asio_callback_done,
     asio_control_panel,
     asio_future,
@@ -1100,6 +1208,7 @@ const unixlib_entry_t __wine_unix_call_wow64_funcs[] =
     asio_output_ready,
     asio_get_sample_position,
     asio_get_callback,
+    asio_wait_callback,
     asio_callback_done,
     asio_control_panel,
     asio_future,
