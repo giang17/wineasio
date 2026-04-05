@@ -758,16 +758,19 @@ LONG STDMETHODCALLTYPE CreateBuffers(LPWINEASIO iface, ASIOBufferInfo *bufferInf
      * side for use in JACK callbacks.
      */
     buffer_bytes = sizeof(float) * bufferSize;  /* JACK uses float samples */
-    
+
     /* Free old PE-side buffers if any */
     if (This->pe_audio_buffers) {
-        HeapFree(GetProcessHeap(), 0, This->pe_audio_buffers);
+        _aligned_free(This->pe_audio_buffers);
         This->pe_audio_buffers = NULL;
     }
-    
-    /* Allocate one big block for all buffers: numChannels * 2 (double-buffer) * buffer_bytes */
-    This->pe_audio_buffers = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, 
-                                        numChannels * 2 * buffer_bytes);
+
+    /* Allocate one big block for all buffers: numChannels * 2 (double-buffer) * buffer_bytes.
+     * 64-byte alignment matches JACK buffer alignment for optimal SSE/AVX memcpy
+     * in the realtime jack_process_callback. */
+    This->pe_audio_buffers = _aligned_malloc(numChannels * 2 * buffer_bytes, 64);
+    if (This->pe_audio_buffers)
+        memset(This->pe_audio_buffers, 0, numChannels * 2 * buffer_bytes);
     if (!This->pe_audio_buffers) {
         HeapFree(GetProcessHeap(), 0, unix_infos);
         return ASE_NoMemory;
@@ -807,7 +810,7 @@ LONG STDMETHODCALLTYPE CreateBuffers(LPWINEASIO iface, ASIOBufferInfo *bufferInf
     } else {
         /* Failed - free PE buffers */
         if (This->pe_audio_buffers) {
-            HeapFree(GetProcessHeap(), 0, This->pe_audio_buffers);
+            _aligned_free(This->pe_audio_buffers);
             This->pe_audio_buffers = NULL;
         }
     }
@@ -825,7 +828,7 @@ LONG STDMETHODCALLTYPE DisposeBuffers(LPWINEASIO iface)
 
     /* Free PE-side audio buffers (were allocated in CreateBuffers) */
     if (This->pe_audio_buffers) {
-        HeapFree(GetProcessHeap(), 0, This->pe_audio_buffers);
+        _aligned_free(This->pe_audio_buffers);
         This->pe_audio_buffers = NULL;
         This->pe_num_buffers = 0;
         This->pe_buffer_size = 0;
