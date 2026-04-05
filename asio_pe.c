@@ -823,9 +823,17 @@ LONG STDMETHODCALLTYPE DisposeBuffers(LPWINEASIO iface)
     struct asio_dispose_buffers_params params = { .handle = This->handle };
 
     UNIX_CALL(asio_dispose_buffers, &params);
-    
+
+    /* Free PE-side audio buffers (were allocated in CreateBuffers) */
+    if (This->pe_audio_buffers) {
+        HeapFree(GetProcessHeap(), 0, This->pe_audio_buffers);
+        This->pe_audio_buffers = NULL;
+        This->pe_num_buffers = 0;
+        This->pe_buffer_size = 0;
+    }
+
     This->callbacks = NULL;
-    
+
     return params.result;
 }
 
