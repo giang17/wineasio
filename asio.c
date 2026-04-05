@@ -29,6 +29,7 @@
 #include <errno.h>
 #include <limits.h>
 #include <unistd.h>
+#include <signal.h>
 #include <sys/mman.h>
 #include <pthread.h>
 
@@ -454,7 +455,10 @@ HIDDEN LONG STDMETHODCALLTYPE Init(LPWINEASIO iface, void *sysRef)
     int             i;
 
     This->sys_ref = sysRef;
-    mlockall(MCL_FUTURE);
+    /* mlockall(MCL_FUTURE) removed — it locked ALL future allocations in the
+     * entire process (GUI, plugins, etc.), not just audio buffers. JACK handles
+     * memory locking for its own RT thread internally. The old call caused
+     * "Cannot lock down 107MB" warnings and excessive memory pressure. */
     configure_driver(This);
 
     if (!(This->jack_client = jackbridge_client_open(This->jack_client_name, jack_options, &jack_status)))
@@ -1161,10 +1165,21 @@ HIDDEN LONG STDMETHODCALLTYPE ControlPanel(LPWINEASIO iface)
 
     TRACE("iface: %p\n", iface);
 
-    if (vfork() == 0)
     {
-        execvp (arg0, arg_list);
-        _exit(1);
+        /* Use fork() instead of vfork() — vfork() blocks the parent process
+         * and is dangerous in multi-threaded audio applications (deadlock risk).
+         * Ignore SIGCHLD to auto-reap the child and avoid zombies. */
+        struct sigaction sa;
+        sa.sa_handler = SIG_IGN;
+        sigemptyset(&sa.sa_mask);
+        sa.sa_flags = SA_NOCLDWAIT;
+        sigaction(SIGCHLD, &sa, NULL);
+
+        if (fork() == 0)
+        {
+            execvp(arg0, arg_list);
+            _exit(1);
+        }
     }
     return 0;
 }

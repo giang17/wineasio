@@ -32,6 +32,7 @@
 #include <errno.h>
 #include <limits.h>
 #include <unistd.h>
+#include <signal.h>
 #include <sys/mman.h>
 #include <sys/eventfd.h>
 #include <poll.h>
@@ -1145,7 +1146,14 @@ static NTSTATUS asio_control_panel(void *args)
         return STATUS_SUCCESS;
     }
     
-    /* Parent process - don't wait for child */
+    /* Parent process — ignore SIGCHLD to auto-reap child and avoid zombies */
+    {
+        struct sigaction sa;
+        sa.sa_handler = SIG_IGN;
+        sigemptyset(&sa.sa_mask);
+        sa.sa_flags = SA_NOCLDWAIT;
+        sigaction(SIGCHLD, &sa, NULL);
+    }
     params->result = ASE_OK;
     
     return STATUS_SUCCESS;
