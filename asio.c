@@ -343,12 +343,13 @@ static const IWineASIOVtbl WineASIO_Vtbl =
 };
 
 /* structure needed to create the JACK callback thread in the wine process context */
-struct {
+static struct {
     void        *(*jack_callback_thread) (void*);
     void        *arg;
     pthread_t   jack_callback_pthread_id;
     HANDLE      jack_callback_thread_created;
-} jack_thread_creator_privates;
+    pthread_mutex_t lock;
+} jack_thread_creator_privates = { .lock = PTHREAD_MUTEX_INITIALIZER };
 
 /*****************************************************************************
  * Interface method definitions
@@ -911,7 +912,7 @@ HIDDEN LONG STDMETHODCALLTYPE GetSamplePosition(LPWINEASIO iface, w_int64_t *sPo
     tStamp->lo = This->host_time_stamp.lo;
     tStamp->hi = This->host_time_stamp.hi;
     sPos->lo = This->host_num_samples.lo;
-    sPos->hi = 0; /* FIXME */
+    sPos->hi = This->host_num_samples.hi;
 
     return 0;
 }
@@ -1410,12 +1411,14 @@ static int jack_thread_creator(pthread_t* thread_id, const pthread_attr_t* attr,
 {
     TRACE("arg: %p, thread_id: %p, attr: %p, function: %p\n", arg, thread_id, attr, function);
 
+    pthread_mutex_lock(&jack_thread_creator_privates.lock);
     jack_thread_creator_privates.jack_callback_thread = function;
     jack_thread_creator_privates.arg = arg;
     jack_thread_creator_privates.jack_callback_thread_created = CreateEventW(NULL, FALSE, FALSE, NULL);
     CreateThread( NULL, 0, jack_thread_creator_helper, arg, 0,0 );
     WaitForSingleObject(jack_thread_creator_privates.jack_callback_thread_created, INFINITE);
     *thread_id = jack_thread_creator_privates.jack_callback_pthread_id;
+    pthread_mutex_unlock(&jack_thread_creator_privates.lock);
     return 0;
 }
 
