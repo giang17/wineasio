@@ -528,7 +528,7 @@ LONG STDMETHODCALLTYPE Start(LPWINEASIO iface)
     UNIX_CALL(asio_start, &params);
     
     if (params.result != ASE_OK) {
-        ERR("Start failed: %d\n", params.result);
+        ERR("Start failed: %ld\n", params.result);
         return params.result;
     }
     
@@ -813,7 +813,7 @@ LONG STDMETHODCALLTYPE CreateBuffers(LPWINEASIO iface, ASIOBufferInfo *bufferInf
     }
     
     HeapFree(GetProcessHeap(), 0, unix_infos);
-    
+
     return params.result;
 }
 
@@ -821,7 +821,6 @@ LONG STDMETHODCALLTYPE DisposeBuffers(LPWINEASIO iface)
 {
     IWineASIO *This = (IWineASIO *)iface;
     struct asio_dispose_buffers_params params = { .handle = This->handle };
-
     UNIX_CALL(asio_dispose_buffers, &params);
 
     /* Free PE-side audio buffers (were allocated in CreateBuffers) */

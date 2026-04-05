@@ -654,7 +654,19 @@ static NTSTATUS asio_start(void *args)
     stream->sample_position = 0;
     stream->system_time = get_system_time();
     stream->buffer_switch_pending = FALSE;
-    
+
+    /* Clear stale flags from JACK activation callbacks.
+     * jack_activate() triggers sample_rate_callback and buffer_size_callback
+     * which set these flags. With blocking poll (asio_wait_callback), the
+     * callback thread would deliver them with the first buffer switch,
+     * causing the host to reset the driver in a loop. */
+    pthread_mutex_lock(&stream->callback_lock);
+    stream->sample_rate_changed = FALSE;
+    stream->reset_request = FALSE;
+    stream->latency_changed = FALSE;
+    stream->new_sample_rate = 0;
+    pthread_mutex_unlock(&stream->callback_lock);
+
     stream->state = Running;
     params->result = ASE_OK;
 
