@@ -532,23 +532,14 @@ LONG STDMETHODCALLTYPE Start(LPWINEASIO iface)
         return params.result;
     }
     
-    /* Start callback polling thread */
+    /* Start callback thread — it will deliver the first bufferSwitch when
+     * JACK's process callback fires. No manual priming needed; the old
+     * synchronous bufferSwitch(0, TRUE) here caused a double buffer-switch
+     * (once from priming, once from JACK callback) which violates the
+     * ASIO specification. */
     This->stop_callback_thread = FALSE;
     This->callback_thread = CreateThread(NULL, 0, callback_thread_proc, This, 0, NULL);
-    
-    /* Prime the first buffer */
-    /* Prime first buffer */
-    if (This->callbacks) {
-        if (This->time_info_mode) {
-            memset(&This->host_time, 0, sizeof(This->host_time));
-            This->host_time.sampleRate = This->sample_rate;
-            This->host_time.flags = 0x7;
-            This->callbacks->bufferSwitchTimeInfo(&This->host_time, 0, TRUE);
-        } else {
-            This->callbacks->bufferSwitch(0, TRUE);
-        }
-    }
-    
+
     return ASE_OK;
 }
 
