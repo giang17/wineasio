@@ -198,7 +198,7 @@ typedef struct IWineASIOImpl
     Callbacks                  *host_callbacks;
     BOOL                        host_can_time_code;
     LONG                        host_current_buffersize;
-    INT                         host_driver_state;
+    volatile INT                host_driver_state;
     w_int64_t                   host_num_samples;
     double                      host_sample_rate;
     TimeInformation             host_time;
@@ -494,7 +494,13 @@ HIDDEN LONG STDMETHODCALLTYPE Init(LPWINEASIO iface, void *sysRef)
         snprintf(This->input_channel[i].port_name, WINEASIO_MAX_NAME_LENGTH, "in_%i", i + 1);
         This->input_channel[i].port = jackbridge_port_register(This->jack_client,
             This->input_channel[i].port_name, JACK_DEFAULT_AUDIO_TYPE, JackPortIsInput, i);
-        /* TRACE("IOChannel structure initialized for input %d: '%s'\n", i, This->input_channel[i].port_name); */
+        if (!This->input_channel[i].port)
+        {
+            ERR("Failed to register JACK input port %d\n", i);
+            jackbridge_client_close(This->jack_client);
+            HeapFree(GetProcessHeap(), 0, This->input_channel);
+            return 0;
+        }
     }
     for (i = 0; i < This->wineasio_number_outputs; i++)
     {
@@ -503,7 +509,13 @@ HIDDEN LONG STDMETHODCALLTYPE Init(LPWINEASIO iface, void *sysRef)
         snprintf(This->output_channel[i].port_name, WINEASIO_MAX_NAME_LENGTH, "out_%i", i + 1);
         This->output_channel[i].port = jackbridge_port_register(This->jack_client,
             This->output_channel[i].port_name, JACK_DEFAULT_AUDIO_TYPE, JackPortIsOutput, i);
-        /* TRACE("IOChannel structure initialized for output %d: '%s'\n", i, This->output_channel[i].port_name); */
+        if (!This->output_channel[i].port)
+        {
+            ERR("Failed to register JACK output port %d\n", i);
+            jackbridge_client_close(This->jack_client);
+            HeapFree(GetProcessHeap(), 0, This->input_channel);
+            return 0;
+        }
     }
     TRACE("%i IOChannel structures initialized\n", This->wineasio_number_inputs + This->wineasio_number_outputs);
 
@@ -512,14 +524,18 @@ HIDDEN LONG STDMETHODCALLTYPE Init(LPWINEASIO iface, void *sysRef)
     if (!jackbridge_set_buffer_size_callback(This->jack_client, jack_buffer_size_callback, This))
     {
         jackbridge_client_close(This->jack_client);
+        jackbridge_free(This->jack_input_ports);
+        jackbridge_free(This->jack_output_ports);
         HeapFree(GetProcessHeap(), 0, This->input_channel);
         ERR("Unable to register JACK buffer size change callback\n");
         return 0;
     }
-    
+
     if (!jackbridge_set_latency_callback(This->jack_client, jack_latency_callback, This))
     {
         jackbridge_client_close(This->jack_client);
+        jackbridge_free(This->jack_input_ports);
+        jackbridge_free(This->jack_output_ports);
         HeapFree(GetProcessHeap(), 0, This->input_channel);
         ERR("Unable to register JACK latency callback\n");
         return 0;
@@ -528,6 +544,8 @@ HIDDEN LONG STDMETHODCALLTYPE Init(LPWINEASIO iface, void *sysRef)
     if (!jackbridge_set_process_callback(This->jack_client, jack_process_callback, This))
     {
         jackbridge_client_close(This->jack_client);
+        jackbridge_free(This->jack_input_ports);
+        jackbridge_free(This->jack_output_ports);
         HeapFree(GetProcessHeap(), 0, This->input_channel);
         ERR("Unable to register JACK process callback\n");
         return 0;
@@ -536,6 +554,8 @@ HIDDEN LONG STDMETHODCALLTYPE Init(LPWINEASIO iface, void *sysRef)
     if (!jackbridge_set_sample_rate_callback (This->jack_client, jack_sample_rate_callback, This))
     {
         jackbridge_client_close(This->jack_client);
+        jackbridge_free(This->jack_input_ports);
+        jackbridge_free(This->jack_output_ports);
         HeapFree(GetProcessHeap(), 0, This->input_channel);
         ERR("Unable to register JACK sample rate change callback\n");
         return 0;
@@ -1547,9 +1567,13 @@ static VOID configure_driver(IWineASIOImpl *This)
     /* get client name by stripping path and extension */
     GetModuleFileNameW(0, application_path, MAX_PATH);
     application_name = strrchrW(application_path, L'.');
-    *application_name = 0;
+    if (application_name)
+        *application_name = 0;
     application_name = strrchrW(application_path, L'\\');
-    application_name++;
+    if (application_name)
+        application_name++;
+    else
+        application_name = application_path;  /* no backslash — use entire string */
     WideCharToMultiByte(CP_ACP, WC_SEPCHARS, application_name, -1, This->jack_client_name, WINEASIO_MAX_NAME_LENGTH, NULL, NULL);
 
     RegCloseKey(hkey);

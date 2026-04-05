@@ -483,13 +483,31 @@ static NTSTATUS asio_init(void *args)
         snprintf(stream->inputs[i].name, MAX_NAME_LENGTH, "in_%d", i + 1);
         stream->inputs[i].port = pjack_port_register(stream->client,
             stream->inputs[i].name, JACK_DEFAULT_AUDIO_TYPE, JackPortIsInput, 0);
+        if (!stream->inputs[i].port) {
+            ERR("Failed to register JACK input port %d\n", i);
+            pjack_client_close(stream->client);
+            pthread_mutex_destroy(&stream->callback_lock);
+            if (stream->event_fd >= 0) close(stream->event_fd);
+            free(stream);
+            params->result = ASE_HWMalfunction;
+            return STATUS_SUCCESS;
+        }
         stream->inputs[i].active = FALSE;
     }
-    
+
     for (i = 0; i < stream->num_outputs; i++) {
         snprintf(stream->outputs[i].name, MAX_NAME_LENGTH, "out_%d", i + 1);
         stream->outputs[i].port = pjack_port_register(stream->client,
             stream->outputs[i].name, JACK_DEFAULT_AUDIO_TYPE, JackPortIsOutput, 0);
+        if (!stream->outputs[i].port) {
+            ERR("Failed to register JACK output port %d\n", i);
+            pjack_client_close(stream->client);
+            pthread_mutex_destroy(&stream->callback_lock);
+            if (stream->event_fd >= 0) close(stream->event_fd);
+            free(stream);
+            params->result = ASE_HWMalfunction;
+            return STATUS_SUCCESS;
+        }
         stream->outputs[i].active = FALSE;
     }
     
@@ -636,7 +654,19 @@ static NTSTATUS asio_start(void *args)
     stream->sample_position = 0;
     stream->system_time = get_system_time();
     stream->buffer_switch_pending = FALSE;
-    
+
+    /* Clear stale flags from JACK activation callbacks.
+     * jack_activate() triggers sample_rate_callback and buffer_size_callback
+     * which set these flags. With blocking poll (asio_wait_callback), the
+     * callback thread would deliver them with the first buffer switch,
+     * causing the host to reset the driver in a loop. */
+    pthread_mutex_lock(&stream->callback_lock);
+    stream->sample_rate_changed = FALSE;
+    stream->reset_request = FALSE;
+    stream->latency_changed = FALSE;
+    stream->new_sample_rate = 0;
+    pthread_mutex_unlock(&stream->callback_lock);
+
     stream->state = Running;
     params->result = ASE_OK;
 
