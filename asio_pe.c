@@ -376,57 +376,56 @@ static void read_config(IWineASIO *This)
     
 }
 
-/* Callback polling thread - polls Unix side for buffer switches */
+/* Callback thread — blocks on eventfd via Unix-side poll() instead of Sleep-polling.
+ * At 128 samples/48kHz (~2.67ms period), Sleep(1) added up to 1ms jitter and ~1000
+ * unnecessary unix_calls/sec. The new approach wakes within microseconds of JACK callback. */
 static DWORD WINAPI callback_thread_proc(LPVOID arg)
 {
     IWineASIO *This = (IWineASIO *)arg;
-    struct asio_get_callback_params params;
-    
+    struct asio_wait_callback_params params;
+
     while (!This->stop_callback_thread) {
+        memset(&params, 0, sizeof(params));
         params.handle = This->handle;
-        
-        UNIX_CALL(asio_get_callback, &params);
-        
+        params.timeout_ms = 10;  /* 10ms max wait — allows stop_callback_thread check */
+
+        UNIX_CALL(asio_wait_callback, &params);
+
         if (params.result == ASE_OK && params.buffer_switch_ready && This->callbacks) {
             /* Handle sample rate change */
             if (params.sample_rate_changed) {
                 This->sample_rate = params.new_sample_rate;
                 This->callbacks->sampleRateDidChange(params.new_sample_rate);
             }
-            
+
             /* Handle reset request */
             if (params.reset_request) {
                 This->callbacks->asioMessage(1 /* kAsioSelectorSupported */, 3 /* kAsioResetRequest */, NULL, NULL);
                 This->callbacks->asioMessage(3 /* kAsioResetRequest */, 0, NULL, NULL);
             }
-            
+
             /* Handle latency change */
             if (params.latency_changed) {
                 This->callbacks->asioMessage(1, 6 /* kAsioLatenciesChanged */, NULL, NULL);
                 This->callbacks->asioMessage(6, 0, NULL, NULL);
             }
-            
-            /* Buffer switch - no debug logging in hot path to avoid xruns */
+
+            /* Buffer switch */
             if (This->time_info_mode) {
-                /* Use time info mode */
                 This->host_time.timeInfo.hi = (LONG)(params.time_info.sample_position >> 32);
                 This->host_time.timeInfo.lo = (LONG)(params.time_info.sample_position & 0xFFFFFFFF);
                 This->host_time.systemTime.hi = (LONG)(params.time_info.system_time >> 32);
                 This->host_time.systemTime.lo = (LONG)(params.time_info.system_time & 0xFFFFFFFF);
                 This->host_time.sampleRate = params.time_info.sample_rate;
                 This->host_time.flags = params.time_info.flags;
-                
+
                 This->callbacks->bufferSwitchTimeInfo(&This->host_time, params.buffer_index, params.direct_process);
             } else {
-                /* Use simple buffer switch */
                 This->callbacks->bufferSwitch(params.buffer_index, params.direct_process);
             }
         }
-        
-        /* Small sleep to avoid busy waiting - 1ms */
-        Sleep(1);
     }
-    
+
     return 0;
 }
 

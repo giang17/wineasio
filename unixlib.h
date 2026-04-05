@@ -235,6 +235,22 @@ struct asio_get_callback_params {
     BOOL latency_changed;
 };
 
+/* Wait for callback notification (replaces Sleep-polling) */
+struct asio_wait_callback_params {
+    asio_handle handle;
+    LONG timeout_ms;    /* Max wait time in milliseconds */
+    HRESULT result;
+    BOOL buffer_switch_ready;
+    LONG buffer_index;
+    BOOL direct_process;
+    struct asio_time_info time_info;
+    BOOL sample_rate_changed;
+    double new_sample_rate;
+    BOOL reset_request;
+    BOOL resync_request;
+    BOOL latency_changed;
+};
+
 /* Acknowledge that callback was processed */
 struct asio_callback_done_params {
     asio_handle handle;
@@ -274,6 +290,7 @@ enum unix_funcs {
     unix_asio_output_ready,
     unix_asio_get_sample_position,
     unix_asio_get_callback,
+    unix_asio_wait_callback,
     unix_asio_callback_done,
     unix_asio_control_panel,
     unix_asio_future,
