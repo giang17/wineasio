@@ -1,6 +1,6 @@
 # Contributing to WineASIO
 
-Thank you for your interest in contributing to WineASIO! 🎵🍷
+Thank you for your interest in contributing to WineASIO!
 
 ## Ways to Contribute
 

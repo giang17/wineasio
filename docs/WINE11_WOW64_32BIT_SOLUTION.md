@@ -1,7 +1,7 @@
 # Wine 11 WoW64 32-bit WineASIO - SOLVED!
 
 **Date**: 2026-01-21  
-**Status**: ✅ Working
+**Status**: Working
 
 ## The Problem
 
@@ -156,10 +156,10 @@ If you see `audio_buffer=(nil)` warnings, the fix is not installed correctly.
 
 | Application | Architecture | Status |
 |-------------|--------------|--------|
-| REAPER 32-bit | 32-bit PE | ✅ Working |
-| Garritan CFX Lite | 32-bit PE | ✅ Working |
-| test_asio_interactive.exe | 32-bit PE | ✅ Working |
-| REAPER 64-bit | 64-bit PE | ✅ Working (was already working) |
+| REAPER 32-bit | 32-bit PE | Working |
+| Garritan CFX Lite | 32-bit PE | Working |
+| test_asio_interactive.exe | 32-bit PE | Working |
+| REAPER 64-bit | 64-bit PE | Working (was already working) |
 
 ## Quick Build & Install
 

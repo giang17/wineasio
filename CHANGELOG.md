@@ -67,11 +67,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Tested
 
 Successfully tested with:
-- REAPER 32-bit ✅
-- REAPER 64-bit ✅
-- Garritan CFX Lite (32-bit) ✅
-- FL Studio 2025 ✅
-- Custom test programs ✅
+- REAPER 32-bit
+- REAPER 64-bit
+- Garritan CFX Lite (32-bit)
+- FL Studio 2025
+- Custom test programs
 
 ### Technical Details
 

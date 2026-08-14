@@ -24,13 +24,13 @@ This setup proves that Linux is a fully viable platform for professional audio p
 
 ---
 
-## 🎉 Wine 11 Support (v1.4.2)
+## Wine 11 Support (v1.4.2)
 
 **WineASIO now fully supports Wine 11, including 32-bit applications!**
 
 Wine 11 (released January 13, 2026) introduced a new DLL architecture that separates PE (Windows) code from Unix code. This required a complete rewrite of WineASIO's build system and internal architecture.
 
-### ⚠️ Important: Wine 11 WoW64 Architecture
+### Important: Wine 11 WoW64 Architecture
 
 In Wine 11 WoW64, **32-bit PE DLLs use 64-bit Unix libraries**. This is different from traditional Wine where 32-bit used 32-bit Unix libraries.
 
@@ -46,10 +46,10 @@ This means:
 
 | Wine Version | Build Method | Status |
 |--------------|--------------|--------|
-| Wine 11.x | `make -f Makefile.wine11` | ✅ Fully Supported |
-| Wine 10.2+ | `make -f Makefile.wine11` | ✅ Fully Supported |
-| Wine 10.0-10.1 | `make` (legacy) | ✅ Supported |
-| Wine 6.x-9.x | `make` (legacy) | ✅ Supported |
+| Wine 11.x | `make -f Makefile.wine11` | Fully supported |
+| Wine 10.2+ | `make -f Makefile.wine11` | Fully supported |
+| Wine 10.0-10.1 | `make` (legacy) | Supported |
+| Wine 6.x-9.x | `make` (legacy) | Supported |
 
 ---
 
@@ -59,13 +59,29 @@ This means:
 
 ```sh
 # Ubuntu/Debian
-sudo apt install gcc-mingw-w64 wine-stable wine-stable-dev libjack-jackd2-dev
+sudo apt install gcc-mingw-w64 wine-stable wine-stable-dev
 
 # Fedora
-sudo dnf install mingw64-gcc mingw32-gcc wine-devel jack-audio-connection-kit-devel
+sudo dnf install mingw64-gcc mingw32-gcc wine-devel
 
 # Arch Linux
-sudo pacman -S mingw-w64-gcc wine wine-staging jack2
+sudo pacman -S mingw-w64-gcc wine wine-staging
+```
+
+**No JACK development package is required.** WineASIO does not include any JACK
+header and does not link against libjack; it resolves the library at runtime
+with `dlopen("libjack.so.0")` and declares the handful of JACK types it needs
+itself. This holds for both build paths (`asio_unix.c` for Wine 11+,
+`jackbridge.c` for the legacy build). JACK is a **runtime** dependency — you
+need a running JACK server and `libjack.so.0` present, nothing at compile time.
+
+**Building against a self-built Wine** instead of a distribution package: point
+`WINE_PREFIX` at your installation and put its `bin/` on PATH, so that the Wine
+headers and `winebuild` are picked up from there:
+
+```sh
+PATH=/path/to/wine/bin:$PATH \
+make -f Makefile.wine11 all WINE_PREFIX=/path/to/wine
 ```
 
 ### Build Commands (Wine 11+)
@@ -298,6 +314,37 @@ Make sure the DLL is marked as a Wine builtin:
 
 ```sh
 sudo winebuild --builtin /opt/wine-stable/lib/wine/x86_64-windows/wineasio64.dll
+```
+
+`Makefile.wine11` already does this for both architectures after linking. Note
+that it swallows failures (`2>/dev/null || true`), so if the driver is not
+picked up, verify the marker is actually there:
+
+```sh
+strings wineasio64.dll | grep -c 'Wine builtin DLL'   # must be 1, not 0
+```
+
+### 32-bit: regsvr32 fails with exit 3 (LoadLibrary failed)
+
+Symptom, visible with `WINEDEBUG=+loaddll`:
+
+```
+err:module:import_dll Library libgcc_s_dw2-1.dll (which is needed by
+L"C:\windows\syswow64\wineasio.dll") not found
+```
+
+`i686-w64-mingw32-gcc` links the GCC runtime dynamically by default, and
+`libgcc_s_dw2-1.dll` does not exist in any Wine prefix — so the DLL cannot even
+be loaded, long before any ASIO call happens. The 64-bit build is unaffected,
+which is why this only shows up with 32-bit plugin hosts under WoW64.
+
+Fixed since the `-static-libgcc` change in `Makefile.wine11`. If you build
+32-bit outside that Makefile, add the flag yourself and check that both
+variants import the same libraries:
+
+```sh
+x86_64-w64-mingw32-objdump -p wineasio.dll | grep 'DLL Name'
+# expected: ADVAPI32.dll, KERNEL32.dll, msvcrt.dll — and nothing else
 ```
 
 ### JACK not connecting

@@ -129,7 +129,7 @@ Wine 11 introduced a new architecture separating Windows (PE) and Unix code:
 
 ## 32-bit Support Status
 
-### Current Status: ✅ FULLY WORKING (v1.4.2)
+### Current Status: fully working (v1.4.2)
 
 As of 2026-01-21, WineASIO 32-bit support for Wine 11 is **complete and functional**.
 
@@ -137,11 +137,11 @@ As of 2026-01-21, WineASIO 32-bit support for Wine 11 is **complete and function
 
 | Application | Architecture | Status |
 |-------------|--------------|--------|
-| REAPER 32-bit | 32-bit PE | ✅ Working |
-| REAPER 64-bit | 64-bit PE | ✅ Working |
-| Garritan CFX Lite | 32-bit PE | ✅ Working |
-| FL Studio 2025 | 64-bit PE | ✅ Working |
-| test_asio_interactive.exe | 32-bit PE | ✅ Working |
+| REAPER 32-bit | 32-bit PE | Working |
+| REAPER 64-bit | 64-bit PE | Working |
+| Garritan CFX Lite | 32-bit PE | Working |
+| FL Studio 2025 | 64-bit PE | Working |
+| test_asio_interactive.exe | 32-bit PE | Working |
 
 ---
 

@@ -300,7 +300,7 @@ Note: 32-bit uses `wineasio` (not `wineasio32`) to match Wine's internal expecta
 
 Wine 11 WoW64 uses separate directories for PE and Unix libraries.
 
-**⚠️ CRITICAL:** In Wine 11 WoW64, there is NO `i386-unix/` directory! 32-bit PE DLLs use 64-bit Unix libraries!
+**CRITICAL:** In Wine 11 WoW64, there is NO `i386-unix/` directory! 32-bit PE DLLs use 64-bit Unix libraries!
 
 ```
 /opt/wine-stable/lib/wine/

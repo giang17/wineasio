@@ -76,13 +76,13 @@ Because PE and Unix run in different address spaces:
 
 ## Current Status (2026-01-21)
 
-### ✅ Working
+### Working
 - 64-bit WineASIO (all applications)
 - 32-bit Unix library loading (now 64-bit binary)
 - JACK client creation for test programs
 - Init(), CreateBuffers() succeed
 
-### ⚠️ In Progress
+### In Progress
 - Audio buffer pointer sharing between PE and Unix
 - REAPER 32-bit audio playback
 
