@@ -39,8 +39,14 @@ PE_LIBS = -lole32 -loleaut32 -luuid -ladvapi32 -lkernel32
 # 32-bit specific linker flags for Wine 11 WoW64 compatibility
 # 1. Lower image base to avoid conflicts in WoW64 32-bit address space
 # 2. Disable relocations to work around Wine WoW64 relocation table bugs
+# 3. -static-libgcc: i686-w64-mingw32 linkt die GCC-Runtime sonst DYNAMISCH
+#    gegen libgcc_s_dw2-1.dll. Die liegt in keinem Wine-Prefix, also scheitert
+#    LoadLibrary und regsvr32 bricht mit Exit 3 ab:
+#      err:module:import_dll Library libgcc_s_dw2-1.dll (which is needed by
+#      L"C:\windows\syswow64\wineasio.dll") not found
+#    Der 64-Bit-Build ist nicht betroffen (importiert nur ADVAPI32/KERNEL32/msvcrt).
 # Note: --builtin flag is now RE-ENABLED because it's required for Unix side loading
-PE_LDFLAGS_32 = $(PE_LDFLAGS) -Wl,--image-base=0x10000000 -Wl,--disable-reloc-section
+PE_LDFLAGS_32 = $(PE_LDFLAGS) -Wl,--image-base=0x10000000 -Wl,--disable-reloc-section -static-libgcc
 
 # Flags for Unix .so (Linux side - gcc)
 # Note: Add -DWINEASIO_DEBUG to enable trace output for debugging
