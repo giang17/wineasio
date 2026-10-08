@@ -354,7 +354,9 @@ static void read_config(IWineASIO *This)
     This->config.num_inputs = 16;
     This->config.num_outputs = 16;
     This->config.preferred_bufsize = 1024;
-    This->config.fixed_bufsize = FALSE;
+    /* JACK owns the buffer size unless the registry says otherwise; with it
+     * off, CreateBuffers() switches the whole JACK server to the host's size. */
+    This->config.fixed_bufsize = TRUE;
     This->config.autoconnect = TRUE;
     strcpy(This->config.client_name, "WineASIO");
     This->config.output_buffering = 0;
