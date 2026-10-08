@@ -7,7 +7,7 @@
     <x>0</x>
     <y>0</y>
     <width>400</width>
-    <height>310</height>
+    <height>345</height>
    </rect>
   </property>
   <property name="windowTitle">
@@ -192,7 +192,7 @@ Default is on</string>
        </layout>
       </item>
       <item>
-       <layout class="QHBoxLayout" name="layout_jack_buffer_size">
+       <layout class="QHBoxLayout" name="layout_jack_buffer_size" stretch="1,1">
         <item>
          <widget class="QLabel" name="label_jack_buffer_size">
           <property name="text">
@@ -205,6 +205,55 @@ Default is on</string>
         </item>
         <item>
          <widget class="QComboBox" name="cb_jack_buffer_size"/>
+        </item>
+       </layout>
+      </item>
+      <item>
+       <layout class="QHBoxLayout" name="layout_jack_output_buffering" stretch="1,1">
+        <item>
+         <widget class="QLabel" name="label_jack_output_buffering">
+          <property name="toolTip">
+           <string>How many JACK periods the output of the host waits before JACK sends it.
+Off: sent in the same JACK cycle, the host has to finish within one period.
+1 or 2 periods: more time for the host, and one or two periods of added
+output latency (2.67 or 5.33 ms at 128 frames / 48 kHz), which WineASIO
+reports to the host. 2 periods is the timing of WineASIO 1.4.0 to 1.5.0.
+Default is off</string>
+          </property>
+          <property name="text">
+           <string>Output buffering:</string>
+          </property>
+          <property name="alignment">
+           <set>Qt::AlignRight|Qt::AlignTrailing|Qt::AlignVCenter</set>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QComboBox" name="cb_jack_output_buffering">
+          <property name="toolTip">
+           <string>How many JACK periods the output of the host waits before JACK sends it.
+Off: sent in the same JACK cycle, the host has to finish within one period.
+1 or 2 periods: more time for the host, and one or two periods of added
+output latency (2.67 or 5.33 ms at 128 frames / 48 kHz), which WineASIO
+reports to the host. 2 periods is the timing of WineASIO 1.4.0 to 1.5.0.
+Default is off</string>
+          </property>
+          <item>
+           <property name="text">
+            <string>Off (lowest latency)</string>
+           </property>
+          </item>
+          <item>
+           <property name="text">
+            <string>1 period</string>
+           </property>
+          </item>
+          <item>
+           <property name="text">
+            <string>2 periods</string>
+           </property>
+          </item>
+         </widget>
         </item>
        </layout>
       </item>

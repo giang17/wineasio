@@ -102,6 +102,7 @@ class WineASIOSettingsDialog(QDialog, Ui_WineASIOSettings):
         self.cb_jack_autostart.clicked.connect(self.slot_flagChanged)
         self.cb_jack_fixed_bsize.clicked.connect(self.slot_flagChanged)
         self.cb_jack_buffer_size.currentIndexChanged[int].connect(self.slot_flagChanged)
+        self.cb_jack_output_buffering.currentIndexChanged[int].connect(self.slot_flagChanged)
 
     def loadSettings(self):
         ins  = int(getWineASIOKeyValue("Number of inputs", "00000010"), 16)
@@ -111,6 +112,11 @@ class WineASIOSettingsDialog(QDialog, Ui_WineASIOSettings):
         autostart    = bool(int(getWineASIOKeyValue("Autostart server", "00000000"), 10))
         fixed_bsize  = bool(int(getWineASIOKeyValue("Fixed buffersize", "00000001"), 10))
         prefer_bsize = int(getWineASIOKeyValue("Preferred buffersize", "00000400"), 16)
+        out_buffering = int(getWineASIOKeyValue("Output buffering", "00000000"), 16)
+
+        # As the driver: anything but 0 to 2 means 0
+        if out_buffering not in (0, 1, 2):
+            out_buffering = 0
 
         for bsize in BUFFER_SIZE_LIST:
             self.cb_jack_buffer_size.addItem(str(bsize))
@@ -123,6 +129,7 @@ class WineASIOSettingsDialog(QDialog, Ui_WineASIOSettings):
 
         self.cb_jack_autostart.setChecked(autostart)
         self.cb_jack_fixed_bsize.setChecked(fixed_bsize)
+        self.cb_jack_output_buffering.setCurrentIndex(out_buffering)
 
     @pyqtSlot()
     def slot_flagChanged(self):
@@ -139,6 +146,7 @@ class WineASIOSettingsDialog(QDialog, Ui_WineASIOSettings):
         self.cb_jack_autostart.setChecked(False)
         self.cb_jack_fixed_bsize.setChecked(True)
         self.cb_jack_buffer_size.setCurrentIndex(BUFFER_SIZE_LIST.index(1024))
+        self.cb_jack_output_buffering.setCurrentIndex(0)
 
     @pyqtSlot()
     def slot_saveSettings(self):
@@ -150,6 +158,7 @@ class WineASIOSettingsDialog(QDialog, Ui_WineASIOSettings):
         REGFILE += '"Fixed buffersize"=dword:0000000%i\n' % int(1 if self.cb_jack_fixed_bsize.isChecked() else 0)
         REGFILE += '"Number of inputs"=dword:000000%s\n' % smartHex(self.sb_ports_in.value(), 2)
         REGFILE += '"Number of outputs"=dword:000000%s\n' % smartHex(self.sb_ports_out.value(), 2)
+        REGFILE += '"Output buffering"=dword:0000000%i\n' % self.cb_jack_output_buffering.currentIndex()
         REGFILE += '"Preferred buffersize"=dword:0000%s\n' % smartHex(int(self.cb_jack_buffer_size.currentText()), 4)
 
         with open("/tmp/wineasio-settings.reg", "w") as fh:
