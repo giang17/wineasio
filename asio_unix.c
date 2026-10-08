@@ -553,7 +553,8 @@ static NTSTATUS asio_init(void *args)
     }
     
     /* Open JACK client */
-    options = JackNoStartServer;  /* Don't start JACK if not running */
+    /* Start no server unless "Autostart server" asks for it (as upstream) */
+    options = params->config.autostart ? JackNullOption : JackNoStartServer;
     stream->client = pjack_client_open(stream->client_name, options, &status);
     if (!stream->client) {
         ERR("Could not open JACK client '%s' (status=0x%x)\n", stream->client_name, status);

@@ -119,6 +119,7 @@ struct asio_config {
     BOOL autoconnect;
     char client_name[64];
     LONG output_buffering;  /* periods between bufferSwitch() and JACK output: 0 = same cycle */
+    BOOL autostart;         /* let libjack start a server that is not running */
 };
 
 /*
