@@ -216,7 +216,7 @@ env WINEPREFIX=~/my-daw-prefix wineasio-register
 ## Configuration
 
 WineASIO is configured via the Windows registry (`HKEY_CURRENT_USER\Software\Wine\WineASIO`).  
-All options can be overridden by environment variables.
+Every option can be overridden by its environment variable, which takes precedence over the registry: `on`/`off` (or `1`/`0`) for switches, decimal numbers for counts and sizes. A value in another format is ignored.
 
 ### Available Options
 
@@ -224,11 +224,11 @@ All options can be overridden by environment variables.
 |--------------|---------|---------------------|-------------|
 | Number of inputs | 16 | `WINEASIO_NUMBER_INPUTS` | Number of JACK input ports |
 | Number of outputs | 16 | `WINEASIO_NUMBER_OUTPUTS` | Number of JACK output ports |
-| Autostart server | 0 (off) | `WINEASIO_AUTOSTART_SERVER` | Start JACK automatically |
+| Autostart server | 0 (off) | `WINEASIO_AUTOSTART_SERVER` | Let libjack start a JACK server if none is running |
 | Connect to hardware | 1 (on) | `WINEASIO_CONNECT_TO_HARDWARE` | Auto-connect to physical ports |
 | Fixed buffersize | 1 (on) | `WINEASIO_FIXED_BUFFERSIZE` | Buffer size controlled by JACK |
 | Preferred buffersize | 1024 | `WINEASIO_PREFERRED_BUFFERSIZE` | Preferred buffer size (power of 2) |
-| Client name | (auto) | `WINEASIO_CLIENT_NAME` | JACK client name |
+| Client name | WineASIO | `WINEASIO_CLIENT_NAME` | JACK client name (at most 63 characters) |
 | Output buffering | 0 | `WINEASIO_OUTPUT_BUFFERING` | Periods between the host's `bufferSwitch()` and JACK output (0–2), see below |
 
 ### Output buffering

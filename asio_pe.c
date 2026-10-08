@@ -343,13 +343,38 @@ static const GUID CLSID_WineASIO = {
 
 #define UNIX_CALL(func, params) wine_unix_call(wineasio_unix_handle, unix_##func, params)
 
-/* Read configuration from registry */
+/* Environment overrides, as the README documents them and WineASIO upstream reads
+ * them: on/off (also 1/0) for switches, decimal numbers for counts and sizes.
+ * A value in another format leaves the setting unchanged. */
+static void env_switch(const char *name, BOOL *value)
+{
+    char buf[16];
+    DWORD n = GetEnvironmentVariableA(name, buf, sizeof(buf));
+
+    if (!n || n >= sizeof(buf)) return;
+    if (!lstrcmpiA(buf, "on") || !lstrcmpA(buf, "1")) *value = TRUE;
+    else if (!lstrcmpiA(buf, "off") || !lstrcmpA(buf, "0")) *value = FALSE;
+}
+
+static void env_number(const char *name, LONG *value)
+{
+    char buf[32], *end;
+    DWORD n = GetEnvironmentVariableA(name, buf, sizeof(buf));
+    long v;
+
+    if (!n || n >= sizeof(buf)) return;
+    v = strtol(buf, &end, 10);
+    if (end != buf && !*end) *value = v;
+}
+
+/* Read configuration from the registry, then let the environment override it */
 static void read_config(IWineASIO *This)
 {
     HKEY hkey;
     DWORD type, size, value;
     char str_value[256];
-    
+    LONG bs;
+
     /* Set defaults */
     This->config.num_inputs = 16;
     This->config.num_outputs = 16;
@@ -360,6 +385,7 @@ static void read_config(IWineASIO *This)
     This->config.autoconnect = TRUE;
     strcpy(This->config.client_name, "WineASIO");
     This->config.output_buffering = 0;
+    This->config.autostart = FALSE;
 
     if (RegOpenKeyExA(HKEY_CURRENT_USER, "Software\\Wine\\WineASIO", 0, KEY_READ, &hkey) == ERROR_SUCCESS) {
         size = sizeof(value);
@@ -390,18 +416,37 @@ static void read_config(IWineASIO *This)
         if (RegQueryValueExA(hkey, "Output buffering", NULL, &type, (BYTE*)&value, &size) == ERROR_SUCCESS && type == REG_DWORD)
             This->config.output_buffering = value;
 
+        size = sizeof(value);
+        if (RegQueryValueExA(hkey, "Autostart server", NULL, &type, (BYTE*)&value, &size) == ERROR_SUCCESS && type == REG_DWORD)
+            This->config.autostart = value ? TRUE : FALSE;
+
         RegCloseKey(hkey);
     }
 
+    /* The environment overrides the registry, e.g. per application in a
+     * launcher script. */
+    env_number("WINEASIO_NUMBER_INPUTS", &This->config.num_inputs);
+    env_number("WINEASIO_NUMBER_OUTPUTS", &This->config.num_outputs);
+    env_switch("WINEASIO_AUTOSTART_SERVER", &This->config.autostart);
+    env_switch("WINEASIO_CONNECT_TO_HARDWARE", &This->config.autoconnect);
+    env_switch("WINEASIO_FIXED_BUFFERSIZE", &This->config.fixed_bufsize);
+    env_number("WINEASIO_PREFERRED_BUFFERSIZE", &This->config.preferred_bufsize);
+    size = GetEnvironmentVariableA("WINEASIO_CLIENT_NAME", str_value, sizeof(This->config.client_name));
+    if (size > 0 && size < sizeof(This->config.client_name))
+        strcpy(This->config.client_name, str_value);
     /* Output buffering: 0 = the host's output leaves in the same JACK cycle
      * (the host must finish bufferSwitch() within one period), 1 or 2 = one or
      * two periods of pipelining (more time for the host, more latency, both
-     * reported by GetLatencies). The environment overrides the registry, e.g.
-     * per application in a launcher script. */
-    if (GetEnvironmentVariableA("WINEASIO_OUTPUT_BUFFERING", str_value, sizeof(str_value)))
-        This->config.output_buffering = atoi(str_value);
+     * reported by GetLatencies). */
+    env_number("WINEASIO_OUTPUT_BUFFERING", &This->config.output_buffering);
+
     if (This->config.output_buffering < 0 || This->config.output_buffering > 2)
         This->config.output_buffering = 0;
+    /* As upstream: the preferred size must be a power of two in the range
+     * GetBufferSize() reports, otherwise 1024. */
+    bs = This->config.preferred_bufsize;
+    if (!(bs >= 16 && bs <= 8192 && !(bs & (bs - 1))))
+        This->config.preferred_bufsize = 1024;
 }
 
 /* Callback thread — blocks on eventfd via Unix-side poll() instead of Sleep-polling.
