@@ -20,7 +20,9 @@
 
 import os
 import re
+import subprocess
 import sys
+import tempfile
 
 try:
     from PyQt6.QtCore import pyqtSlot, QDir
@@ -101,6 +103,24 @@ def getEnvOverrides():
             overrides.append("%s=%s" % (name, value))
 
     return overrides
+
+def getWineLoader():
+    # Opened through ASIOControlPanel(), the panel is a fork of the host process,
+    # whose executable is the wine or wine-preloader of the Wine installation that
+    # runs the host. Its wine next to it has to import the settings; the regedit
+    # in PATH may belong to another Wine installation than the host's prefix.
+    try:
+        exe = os.readlink("/proc/%d/exe" % os.getppid())
+    except OSError:
+        return None
+
+    unix_dir = os.path.dirname(exe)
+    loader = os.path.join(unix_dir, "wine")
+
+    if unix_dir.endswith("-unix") and os.access(loader, os.X_OK):
+        return loader
+
+    return None
 
 def smartHex(value: str, length: int):
   hexStr = hex(value).replace("0x","")
@@ -196,10 +216,19 @@ class WineASIOSettingsDialog(QDialog, Ui_WineASIOSettings):
         REGFILE += '"Output buffering"=dword:0000000%i\n' % self.cb_jack_output_buffering.currentIndex()
         REGFILE += '"Preferred buffersize"=dword:0000%s\n' % smartHex(int(self.cb_jack_buffer_size.currentText()), 4)
 
-        with open("/tmp/wineasio-settings.reg", "w") as fh:
+        loader  = getWineLoader()
+        command = [loader, "regedit"] if loader else ["regedit"]
+
+        fd, regfile = tempfile.mkstemp(prefix="wineasio-settings-", suffix=".reg")
+        with os.fdopen(fd, "w") as fh:
             fh.write(REGFILE)
 
-        os.system("regedit /tmp/wineasio-settings.reg")
+        try:
+            subprocess.call(command + [regfile])
+        except OSError as e:
+            print("wineasio-settings: cannot run %s: %s" % (command[0], e), file=sys.stderr)
+        finally:
+            os.unlink(regfile)
 
 # ---------------------------------------------------------------------------------------------------------------------
 
