@@ -19,7 +19,10 @@
 # ---------------------------------------------------------------------------------------------------------------------
 
 import os
+import re
+import subprocess
 import sys
+import tempfile
 
 try:
     from PyQt6.QtCore import pyqtSlot, QDir
@@ -47,6 +50,13 @@ if not WINEPREFIX:
 
 WINEASIO_PREFIX = "HKEY_CURRENT_USER\\Software\\Wine\\WineASIO"
 
+# Environment variables the driver reads in read_config(); in a format it accepts
+# they take precedence over the registry values this panel writes.
+ENV_SWITCHES = ("WINEASIO_AUTOSTART_SERVER", "WINEASIO_CONNECT_TO_HARDWARE", "WINEASIO_FIXED_BUFFERSIZE")
+ENV_NUMBERS  = ("WINEASIO_NUMBER_INPUTS", "WINEASIO_NUMBER_OUTPUTS", "WINEASIO_PREFERRED_BUFFERSIZE",
+                "WINEASIO_OUTPUT_BUFFERING")
+ENV_STRINGS  = ("WINEASIO_CLIENT_NAME",)
+
 # ---------------------------------------------------------------------------------------------------------------------
 
 def getWineASIOKeyValue(key: str, default: str):
@@ -73,6 +83,45 @@ def getWineASIOKeyValue(key: str, default: str):
     keyDumpSmall = keyDumpSplit[1].split(":")[1].split("\n")[0]
     return keyDumpSmall
 
+def getEnvOverrides():
+    overrides = []
+
+    for name in sorted(ENV_SWITCHES + ENV_NUMBERS + ENV_STRINGS):
+        value = os.environ.get(name)
+        if not value:
+            continue
+
+        # The same checks as env_switch(), env_number() and the client name in asio_pe.c
+        if name in ENV_SWITCHES:
+            valid = len(value) < 16 and (value.lower() in ("on", "off") or value in ("1", "0"))
+        elif name in ENV_NUMBERS:
+            valid = len(value) < 32 and re.fullmatch(r"\s*[+-]?[0-9]+", value) is not None
+        else:
+            valid = len(value) < 64
+
+        if valid:
+            overrides.append("%s=%s" % (name, value))
+
+    return overrides
+
+def getWineLoader():
+    # Opened through ASIOControlPanel(), the panel is a fork of the host process,
+    # whose executable is the wine or wine-preloader of the Wine installation that
+    # runs the host. Its wine next to it has to import the settings; the regedit
+    # in PATH may belong to another Wine installation than the host's prefix.
+    try:
+        exe = os.readlink("/proc/%d/exe" % os.getppid())
+    except OSError:
+        return None
+
+    unix_dir = os.path.dirname(exe)
+    loader = os.path.join(unix_dir, "wine")
+
+    if unix_dir.endswith("-unix") and os.access(loader, os.X_OK):
+        return loader
+
+    return None
+
 def smartHex(value: str, length: int):
   hexStr = hex(value).replace("0x","")
 
@@ -94,6 +143,12 @@ class WineASIOSettingsDialog(QDialog, Ui_WineASIOSettings):
         self.changed = False
         self.loadSettings()
 
+        overrides = getEnvOverrides()
+        if overrides:
+            self.label_env_overrides.setText("Overridden by the environment:\n" + "\n".join(overrides))
+        else:
+            self.label_env_overrides.setVisible(False)
+
         self.accepted.connect(self.slot_saveSettings)
         self.buttonBox.button(QDialogButtonBox.RestoreDefaults).clicked.connect(self.slot_restoreDefaults)
         self.sb_ports_in.valueChanged.connect(self.slot_flagChanged)
@@ -102,6 +157,7 @@ class WineASIOSettingsDialog(QDialog, Ui_WineASIOSettings):
         self.cb_jack_autostart.clicked.connect(self.slot_flagChanged)
         self.cb_jack_fixed_bsize.clicked.connect(self.slot_flagChanged)
         self.cb_jack_buffer_size.currentIndexChanged[int].connect(self.slot_flagChanged)
+        self.cb_jack_output_buffering.currentIndexChanged[int].connect(self.slot_flagChanged)
 
     def loadSettings(self):
         ins  = int(getWineASIOKeyValue("Number of inputs", "00000010"), 16)
@@ -111,6 +167,11 @@ class WineASIOSettingsDialog(QDialog, Ui_WineASIOSettings):
         autostart    = bool(int(getWineASIOKeyValue("Autostart server", "00000000"), 10))
         fixed_bsize  = bool(int(getWineASIOKeyValue("Fixed buffersize", "00000001"), 10))
         prefer_bsize = int(getWineASIOKeyValue("Preferred buffersize", "00000400"), 16)
+        out_buffering = int(getWineASIOKeyValue("Output buffering", "00000000"), 16)
+
+        # As the driver: anything but 0 to 2 means 0
+        if out_buffering not in (0, 1, 2):
+            out_buffering = 0
 
         for bsize in BUFFER_SIZE_LIST:
             self.cb_jack_buffer_size.addItem(str(bsize))
@@ -123,6 +184,7 @@ class WineASIOSettingsDialog(QDialog, Ui_WineASIOSettings):
 
         self.cb_jack_autostart.setChecked(autostart)
         self.cb_jack_fixed_bsize.setChecked(fixed_bsize)
+        self.cb_jack_output_buffering.setCurrentIndex(out_buffering)
 
     @pyqtSlot()
     def slot_flagChanged(self):
@@ -139,6 +201,7 @@ class WineASIOSettingsDialog(QDialog, Ui_WineASIOSettings):
         self.cb_jack_autostart.setChecked(False)
         self.cb_jack_fixed_bsize.setChecked(True)
         self.cb_jack_buffer_size.setCurrentIndex(BUFFER_SIZE_LIST.index(1024))
+        self.cb_jack_output_buffering.setCurrentIndex(0)
 
     @pyqtSlot()
     def slot_saveSettings(self):
@@ -150,12 +213,22 @@ class WineASIOSettingsDialog(QDialog, Ui_WineASIOSettings):
         REGFILE += '"Fixed buffersize"=dword:0000000%i\n' % int(1 if self.cb_jack_fixed_bsize.isChecked() else 0)
         REGFILE += '"Number of inputs"=dword:000000%s\n' % smartHex(self.sb_ports_in.value(), 2)
         REGFILE += '"Number of outputs"=dword:000000%s\n' % smartHex(self.sb_ports_out.value(), 2)
+        REGFILE += '"Output buffering"=dword:0000000%i\n' % self.cb_jack_output_buffering.currentIndex()
         REGFILE += '"Preferred buffersize"=dword:0000%s\n' % smartHex(int(self.cb_jack_buffer_size.currentText()), 4)
 
-        with open("/tmp/wineasio-settings.reg", "w") as fh:
+        loader  = getWineLoader()
+        command = [loader, "regedit"] if loader else ["regedit"]
+
+        fd, regfile = tempfile.mkstemp(prefix="wineasio-settings-", suffix=".reg")
+        with os.fdopen(fd, "w") as fh:
             fh.write(REGFILE)
 
-        os.system("regedit /tmp/wineasio-settings.reg")
+        try:
+            subprocess.call(command + [regfile])
+        except OSError as e:
+            print("wineasio-settings: cannot run %s: %s" % (command[0], e), file=sys.stderr)
+        finally:
+            os.unlink(regfile)
 
 # ---------------------------------------------------------------------------------------------------------------------
 
