@@ -357,7 +357,8 @@ static void read_config(IWineASIO *This)
     This->config.fixed_bufsize = FALSE;
     This->config.autoconnect = TRUE;
     strcpy(This->config.client_name, "WineASIO");
-    
+    This->config.output_buffering = 0;
+
     if (RegOpenKeyExA(HKEY_CURRENT_USER, "Software\\Wine\\WineASIO", 0, KEY_READ, &hkey) == ERROR_SUCCESS) {
         size = sizeof(value);
         if (RegQueryValueExA(hkey, "Number of inputs", NULL, &type, (BYTE*)&value, &size) == ERROR_SUCCESS && type == REG_DWORD)
@@ -382,10 +383,23 @@ static void read_config(IWineASIO *This)
         size = sizeof(str_value);
         if (RegQueryValueExA(hkey, "Client name", NULL, &type, (BYTE*)str_value, &size) == ERROR_SUCCESS && type == REG_SZ)
             strncpy(This->config.client_name, str_value, 63);
-        
+
+        size = sizeof(value);
+        if (RegQueryValueExA(hkey, "Output buffering", NULL, &type, (BYTE*)&value, &size) == ERROR_SUCCESS && type == REG_DWORD)
+            This->config.output_buffering = value;
+
         RegCloseKey(hkey);
     }
-    
+
+    /* Output buffering: 0 = the host's output leaves in the same JACK cycle
+     * (the host must finish bufferSwitch() within one period), 1 or 2 = one or
+     * two periods of pipelining (more time for the host, more latency, both
+     * reported by GetLatencies). The environment overrides the registry, e.g.
+     * per application in a launcher script. */
+    if (GetEnvironmentVariableA("WINEASIO_OUTPUT_BUFFERING", str_value, sizeof(str_value)))
+        This->config.output_buffering = atoi(str_value);
+    if (This->config.output_buffering < 0 || This->config.output_buffering > 2)
+        This->config.output_buffering = 0;
 }
 
 /* Callback thread — blocks on eventfd via Unix-side poll() instead of Sleep-polling.

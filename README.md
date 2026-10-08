@@ -229,6 +229,15 @@ All options can be overridden by environment variables.
 | Fixed buffersize | 1 (on) | `WINEASIO_FIXED_BUFFERSIZE` | Buffer size controlled by JACK |
 | Preferred buffersize | 1024 | `WINEASIO_PREFERRED_BUFFERSIZE` | Preferred buffer size (power of 2) |
 | Client name | (auto) | `WINEASIO_CLIENT_NAME` | JACK client name |
+| Output buffering | 0 | `WINEASIO_OUTPUT_BUFFERING` | Periods between the host's `bufferSwitch()` and JACK output (0–2), see below |
+
+### Output buffering
+
+- `0` (default): the JACK process callback waits for the host's `bufferSwitch()` and sends its output in the same cycle. Lowest latency; the host has to finish within one period, otherwise JACK reports an xrun, as for any JACK client.
+- `1`: the output of a `bufferSwitch()` leaves one period later. The host processes in parallel with the next JACK cycle and has one more period of headroom.
+- `2`: two periods later, the timing of WineASIO 1.4.0 to 1.5.0.
+
+At 128 frames / 48 kHz the three settings add 0, 2.67 and 5.33 ms of output latency. `GetLatencies()` includes these periods, so hosts compensate recordings correctly. JACK's DSP load only contains the host's processing with `0`; with `1` and `2` that processing runs outside the JACK cycle and does not appear in the reading.
 
 ### GUI Control Panel (Wine 11)
 

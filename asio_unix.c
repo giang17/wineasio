@@ -210,10 +210,11 @@ typedef struct {
     /* Synchronous hand-off: the RT thread waits until the host has finished
      * bufferSwitch() for the current cycle before it copies the output half,
      * so the host's output leaves in the same JACK cycle. */
-    UINT32 cycle_seq;                       /* RT thread only */
+    UINT64 cycle_seq;                       /* RT thread only, cycles since Start() */
     volatile UINT32 done_seq;               /* futex word, last cycle the host finished */
     volatile LONG host_attached;            /* callback thread is taking cycles */
     volatile LONG late_cycles;              /* cycles output as silence, host too late */
+    LONG output_buffering;                  /* periods between bufferSwitch() and JACK output */
 
     /* Config */
     BOOL autoconnect;
@@ -341,12 +342,53 @@ static void wake_rt_thread(AsioStream *stream)
     syscall(SYS_futex, &stream->done_seq, FUTEX_WAKE_PRIVATE, INT_MAX, NULL, NULL, 0);
 }
 
+/* Hand cycle 'seq' (input already in its half) to the PE callback thread. */
+static void signal_cycle(AsioStream *stream, UINT32 seq)
+{
+    uint64_t val = 1;
+
+    /* pending_cycle must be visible before buffer_switch_pending is set. */
+    __atomic_store_n(&stream->pending_cycle, ((INT64)seq << 1) | stream->buffer_index, __ATOMIC_RELAXED);
+    __atomic_store_n(&stream->buffer_switch_pending, TRUE, __ATOMIC_RELEASE);
+
+    /* Wake PE-side wait thread via eventfd (RT-safe: eventfd_write is a single write syscall) */
+    eventfd_write(stream->event_fd, val);
+}
+
+/* Copy output half 'index' to JACK once the host has finished cycle 'seq'.
+ * A host that misses the deadline gets silence for this cycle rather than a
+ * half it may still be writing; so does a cycle that does not exist yet
+ * ('valid' FALSE, the first output_buffering cycles after start). */
+static void send_output(AsioStream *stream, UINT32 seq, BOOL valid, LONG index, jack_nframes_t nframes)
+{
+    BOOL attached = __atomic_load_n(&stream->host_attached, __ATOMIC_ACQUIRE);
+    BOOL host_done = valid && attached && wait_for_host(stream, seq, nframes);
+    int i;
+
+    if (valid && attached && !host_done)
+        __atomic_add_fetch(&stream->late_cycles, 1, __ATOMIC_RELAXED);
+
+    /* Wine 11 WoW64 fix: Use pe_buffer[] instead of audio_buffer */
+    for (i = 0; i < stream->num_outputs; i++) {
+        if (stream->outputs[i].active && stream->outputs[i].port) {
+            void *jack_buf = pjack_port_get_buffer(stream->outputs[i].port, nframes);
+            jack_default_audio_sample_t *pe_buf = stream->outputs[i].pe_buffer[index];
+            if (jack_buf && pe_buf && host_done) {
+                memcpy(jack_buf, pe_buf, sizeof(jack_default_audio_sample_t) * nframes);
+            } else if (jack_buf) {
+                memset(jack_buf, 0, sizeof(jack_default_audio_sample_t) * nframes);
+            }
+            /* No logging in realtime callback - causes xruns */
+        }
+    }
+}
+
 /* JACK process callback - runs in realtime thread */
 static int jack_process_callback(jack_nframes_t nframes, void *arg)
 {
     AsioStream *stream = (AsioStream *)arg;
-    UINT32 seq;
-    BOOL host_done;
+    UINT64 seq;
+    LONG n, out_index;
     int i;
 
     if (stream->state != Running) {
@@ -359,7 +401,19 @@ static int jack_process_callback(jack_nframes_t nframes, void *arg)
         }
         return 0;
     }
-    
+
+    /* The half sent to JACK in this cycle is the one the host filled
+     * output_buffering cycles ago: 0 waits for this cycle's bufferSwitch(),
+     * 1 and 2 give the host one or two more periods. With two halves, 2 sends
+     * the half this cycle is about to refill, so that half goes out (and the
+     * host is done with it) before new input lands in it; 0 and 1 hand the
+     * cycle to the host first. */
+    seq = ++stream->cycle_seq;
+    n = stream->output_buffering;
+    out_index = stream->buffer_index ^ (n & 1);
+    if (n == 2)
+        send_output(stream, (UINT32)(seq - 2), seq > 2, out_index, nframes);
+
     /* Copy JACK input buffers to PE-side buffer
      * Wine 11 WoW64 fix: Use pe_buffer[] instead of audio_buffer
      * pe_buffer[0] and pe_buffer[1] are pointers to PE-allocated memory */
@@ -378,41 +432,9 @@ static int jack_process_callback(jack_nframes_t nframes, void *arg)
     __atomic_store_n(&stream->sample_position, stream->sample_position + nframes, __ATOMIC_RELAXED);
     __atomic_store_n(&stream->system_time, get_system_time(), __ATOMIC_RELAXED);
 
-    /* Signal buffer switch to PE side — lock-free with release semantics.
-     * pending_cycle must be visible before buffer_switch_pending is set. */
-    seq = ++stream->cycle_seq;
-    __atomic_store_n(&stream->pending_cycle, ((INT64)seq << 1) | stream->buffer_index, __ATOMIC_RELAXED);
-    __atomic_store_n(&stream->buffer_switch_pending, TRUE, __ATOMIC_RELEASE);
-
-    /* Wake PE-side wait thread via eventfd (RT-safe: eventfd_write is a single write syscall) */
-    {
-        uint64_t val = 1;
-        eventfd_write(stream->event_fd, val);
-    }
-
-    /* Wait for the host to fill this half, then copy it out in the same cycle.
-     * Copying before the host ran (the former order) sent each half two cycles
-     * late. A host that misses the deadline gets silence for this cycle rather
-     * than a half it may still be writing. */
-    host_done = __atomic_load_n(&stream->host_attached, __ATOMIC_ACQUIRE)
-                && wait_for_host(stream, seq, nframes);
-    if (!host_done && __atomic_load_n(&stream->host_attached, __ATOMIC_RELAXED))
-        __atomic_add_fetch(&stream->late_cycles, 1, __ATOMIC_RELAXED);
-
-    /* Copy PE-side output buffer to JACK
-     * Wine 11 WoW64 fix: Use pe_buffer[] instead of audio_buffer */
-    for (i = 0; i < stream->num_outputs; i++) {
-        if (stream->outputs[i].active && stream->outputs[i].port) {
-            void *jack_buf = pjack_port_get_buffer(stream->outputs[i].port, nframes);
-            jack_default_audio_sample_t *pe_buf = stream->outputs[i].pe_buffer[stream->buffer_index];
-            if (jack_buf && pe_buf && host_done) {
-                memcpy(jack_buf, pe_buf, sizeof(jack_default_audio_sample_t) * nframes);
-            } else if (jack_buf) {
-                memset(jack_buf, 0, sizeof(jack_default_audio_sample_t) * nframes);
-            }
-            /* No logging in realtime callback - causes xruns */
-        }
-    }
+    signal_cycle(stream, (UINT32)seq);
+    if (n != 2)
+        send_output(stream, (UINT32)(seq - n), seq > (UINT64)n, out_index, nframes);
 
     /* Switch buffers */
     stream->buffer_index = stream->buffer_index ? 0 : 1;
@@ -516,6 +538,8 @@ static NTSTATUS asio_init(void *args)
     stream->preferred_bufsize = params->config.preferred_bufsize > 0 ? params->config.preferred_bufsize : 1024;
     stream->fixed_bufsize = params->config.fixed_bufsize;
     stream->autoconnect = params->config.autoconnect;
+    stream->output_buffering = params->config.output_buffering >= 0 && params->config.output_buffering <= 2
+                               ? params->config.output_buffering : 0;
     
     if (stream->num_inputs > MAX_CHANNELS) stream->num_inputs = MAX_CHANNELS;
     if (stream->num_outputs > MAX_CHANNELS) stream->num_outputs = MAX_CHANNELS;
@@ -817,7 +841,10 @@ static NTSTATUS asio_get_latencies(void *args)
         pjack_port_get_latency_range(stream->outputs[0].port, JackPlaybackLatency, &range);
         stream->output_latency = range.max > 0 ? range.max : stream->buffer_size * 2;
     }
-    
+
+    /* Pipelined output leaves output_buffering periods after bufferSwitch(). */
+    stream->output_latency += stream->output_buffering * stream->buffer_size;
+
     params->input_latency = stream->input_latency;
     params->output_latency = stream->output_latency;
     params->result = ASE_OK;
