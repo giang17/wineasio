@@ -261,6 +261,13 @@ Default is off</string>
     </widget>
    </item>
    <item>
+    <widget class="QLabel" name="label_env_overrides">
+     <property name="wordWrap">
+      <bool>true</bool>
+     </property>
+    </widget>
+   </item>
+   <item>
     <widget class="QDialogButtonBox" name="buttonBox">
      <property name="orientation">
       <enum>Qt::Horizontal</enum>

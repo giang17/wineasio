@@ -248,7 +248,7 @@ A PyQt5/PyQt6 control panel is included for configuring WineASIO settings. When 
 2. WineASIO's Unix-side code uses `fork()/exec()` to launch `wineasio-settings`
 3. The Python/PyQt GUI reads and writes settings to the Wine registry
 
-The panel sets every option in the table above except Client name.
+The panel sets every option in the table above except Client name. Below the options it lists the `WINEASIO_*` variables set in its environment in a format the driver accepts, since these take precedence over what the panel saves; opened from the DAW, that is the DAW's environment.
 
 **Launch manually:**
 

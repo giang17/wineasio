@@ -19,6 +19,7 @@
 # ---------------------------------------------------------------------------------------------------------------------
 
 import os
+import re
 import sys
 
 try:
@@ -47,6 +48,13 @@ if not WINEPREFIX:
 
 WINEASIO_PREFIX = "HKEY_CURRENT_USER\\Software\\Wine\\WineASIO"
 
+# Environment variables the driver reads in read_config(); in a format it accepts
+# they take precedence over the registry values this panel writes.
+ENV_SWITCHES = ("WINEASIO_AUTOSTART_SERVER", "WINEASIO_CONNECT_TO_HARDWARE", "WINEASIO_FIXED_BUFFERSIZE")
+ENV_NUMBERS  = ("WINEASIO_NUMBER_INPUTS", "WINEASIO_NUMBER_OUTPUTS", "WINEASIO_PREFERRED_BUFFERSIZE",
+                "WINEASIO_OUTPUT_BUFFERING")
+ENV_STRINGS  = ("WINEASIO_CLIENT_NAME",)
+
 # ---------------------------------------------------------------------------------------------------------------------
 
 def getWineASIOKeyValue(key: str, default: str):
@@ -73,6 +81,27 @@ def getWineASIOKeyValue(key: str, default: str):
     keyDumpSmall = keyDumpSplit[1].split(":")[1].split("\n")[0]
     return keyDumpSmall
 
+def getEnvOverrides():
+    overrides = []
+
+    for name in sorted(ENV_SWITCHES + ENV_NUMBERS + ENV_STRINGS):
+        value = os.environ.get(name)
+        if not value:
+            continue
+
+        # The same checks as env_switch(), env_number() and the client name in asio_pe.c
+        if name in ENV_SWITCHES:
+            valid = len(value) < 16 and (value.lower() in ("on", "off") or value in ("1", "0"))
+        elif name in ENV_NUMBERS:
+            valid = len(value) < 32 and re.fullmatch(r"\s*[+-]?[0-9]+", value) is not None
+        else:
+            valid = len(value) < 64
+
+        if valid:
+            overrides.append("%s=%s" % (name, value))
+
+    return overrides
+
 def smartHex(value: str, length: int):
   hexStr = hex(value).replace("0x","")
 
@@ -93,6 +122,12 @@ class WineASIOSettingsDialog(QDialog, Ui_WineASIOSettings):
 
         self.changed = False
         self.loadSettings()
+
+        overrides = getEnvOverrides()
+        if overrides:
+            self.label_env_overrides.setText("Overridden by the environment:\n" + "\n".join(overrides))
+        else:
+            self.label_env_overrides.setVisible(False)
 
         self.accepted.connect(self.slot_saveSettings)
         self.buttonBox.button(QDialogButtonBox.RestoreDefaults).clicked.connect(self.slot_restoreDefaults)
