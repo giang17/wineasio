@@ -214,12 +214,21 @@ typedef struct {
     LONG lo;
 } ASIOTimeStamp;
 
+/* AsioTimeInfo, ASIOTimeCode and ASIOTime follow the ASIO SDK (asio.h) field
+ * for field: hosts read bufferSwitchTimeInfo()'s ASIOTime at the SDK offsets. */
 typedef struct {
     double speed;
     ASIOTimeStamp systemTime;
-    ASIOSamples samples;
-    ASIOTimeStamp tcTimeCode;
-    LONG flags;
+    ASIOSamples samplePosition;
+    double sampleRate;
+    ULONG flags;
+    char reserved[12];
+} AsioTimeInfo;
+
+typedef struct {
+    double speed;
+    ASIOSamples timeCodeSamples;
+    ULONG flags;
     char future[64];
 } ASIOTimeCode;
 
@@ -239,13 +248,16 @@ typedef struct {
 } ASIOChannelInfo;
 
 typedef struct {
+    LONG reserved[4];
+    AsioTimeInfo timeInfo;
     ASIOTimeCode timeCode;
-    ASIOSamples timeInfo;
-    ASIOTimeStamp systemTime;
-    double sampleRate;
-    LONG flags;
-    char reserved[12];
 } ASIOTime;
+
+C_ASSERT(FIELD_OFFSET(ASIOTime, timeInfo.systemTime) == 24);
+C_ASSERT(FIELD_OFFSET(ASIOTime, timeInfo.samplePosition) == 32);
+C_ASSERT(FIELD_OFFSET(ASIOTime, timeInfo.sampleRate) == 40);
+C_ASSERT(FIELD_OFFSET(ASIOTime, timeInfo.flags) == 48);
+C_ASSERT(sizeof(ASIOTime) == 152);
 
 typedef struct {
     void (*bufferSwitch)(LONG bufferIndex, LONG directProcess);
@@ -412,12 +424,13 @@ static DWORD WINAPI callback_thread_proc(LPVOID arg)
 
             /* Buffer switch */
             if (This->time_info_mode) {
-                This->host_time.timeInfo.hi = (LONG)(params.time_info.sample_position >> 32);
-                This->host_time.timeInfo.lo = (LONG)(params.time_info.sample_position & 0xFFFFFFFF);
-                This->host_time.systemTime.hi = (LONG)(params.time_info.system_time >> 32);
-                This->host_time.systemTime.lo = (LONG)(params.time_info.system_time & 0xFFFFFFFF);
-                This->host_time.sampleRate = params.time_info.sample_rate;
-                This->host_time.flags = params.time_info.flags;
+                This->host_time.timeInfo.speed = params.time_info.speed;
+                This->host_time.timeInfo.samplePosition.hi = (LONG)(params.time_info.sample_position >> 32);
+                This->host_time.timeInfo.samplePosition.lo = (LONG)(params.time_info.sample_position & 0xFFFFFFFF);
+                This->host_time.timeInfo.systemTime.hi = (LONG)(params.time_info.system_time >> 32);
+                This->host_time.timeInfo.systemTime.lo = (LONG)(params.time_info.system_time & 0xFFFFFFFF);
+                This->host_time.timeInfo.sampleRate = params.time_info.sample_rate;
+                This->host_time.timeInfo.flags = params.time_info.flags;
 
                 This->callbacks->bufferSwitchTimeInfo(&This->host_time, params.buffer_index, params.direct_process);
             } else {
@@ -735,14 +748,17 @@ LONG STDMETHODCALLTYPE CreateBuffers(LPWINEASIO iface, ASIOBufferInfo *bufferInf
     This->callbacks = callbacks;
     This->buffer_size = bufferSize;
     
-    /* Check for time info support */
+    /* Check for time info support, as the ASIO SDK sample driver does:
+     * a host answering 1 to kAsioSupportsTimeInfo (7) expects
+     * bufferSwitchTimeInfo() instead of bufferSwitch(). */
     This->time_info_mode = FALSE;
     This->can_time_code = FALSE;
     if (callbacks->asioMessage) {
-        if (callbacks->asioMessage(1 /* kAsioSelectorSupported */, 14 /* kAsioSupportsTimeInfo */, NULL, NULL) == 1)
+        if (callbacks->asioMessage(7 /* kAsioSupportsTimeInfo */, 0, NULL, NULL) == 1) {
             This->time_info_mode = TRUE;
-        if (callbacks->asioMessage(1, 15 /* kAsioSupportsTimeCode */, NULL, NULL) == 1)
-            This->can_time_code = TRUE;
+            if (callbacks->asioMessage(8 /* kAsioSupportsTimeCode */, 0, NULL, NULL) == 1)
+                This->can_time_code = TRUE;
+        }
     }
     
     /* Prepare Unix call */

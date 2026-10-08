@@ -289,10 +289,18 @@ static BOOL load_jack(void)
     return TRUE;
 }
 
-/* Get current time in nanoseconds */
+/* Current time in nanoseconds for ASIOTime.systemTime and GetSamplePosition().
+ * The ASIO SDK requires systemTime to be derived from timeGetTime() on Windows.
+ * Wine's timeGetTime() is QueryPerformanceCounter() based, which reads
+ * CLOCK_BOOTTIME (ntdll monotonic_counter()); CLOCK_MONOTONIC would fall behind
+ * it by the time the system spent suspended. */
 static INT64 get_system_time(void)
 {
     struct timespec ts;
+#ifdef CLOCK_BOOTTIME
+    if (!clock_gettime(CLOCK_BOOTTIME, &ts))
+        return (INT64)ts.tv_sec * 1000000000LL + ts.tv_nsec;
+#endif
     clock_gettime(CLOCK_MONOTONIC, &ts);
     return (INT64)ts.tv_sec * 1000000000LL + ts.tv_nsec;
 }
