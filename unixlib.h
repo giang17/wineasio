@@ -249,13 +249,17 @@ struct asio_wait_callback_params {
     BOOL reset_request;
     BOOL resync_request;
     BOOL latency_changed;
+    UINT32 seq;         /* Cycle number to pass back to asio_callback_done */
 };
 
-/* Acknowledge that callback was processed */
+/* Acknowledge that callback was processed: the JACK process thread waits for
+ * this before it copies the output half to JACK. */
 struct asio_callback_done_params {
     asio_handle handle;
     LONG buffer_index;
     HRESULT result;
+    UINT32 seq;         /* Cycle the host has finished (from asio_wait_callback) */
+    BOOL detach;        /* Callback thread exits: stop waiting for the host */
 };
 
 struct asio_control_panel_params {

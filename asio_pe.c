@@ -423,7 +423,21 @@ static DWORD WINAPI callback_thread_proc(LPVOID arg)
             } else {
                 This->callbacks->bufferSwitch(params.buffer_index, params.direct_process);
             }
+
+            /* The JACK process thread waits for this before it copies the
+             * output half, so the host's output leaves in the same cycle. */
+            {
+                struct asio_callback_done_params done = { .handle = This->handle, .seq = params.seq,
+                                                          .buffer_index = params.buffer_index };
+                UNIX_CALL(asio_callback_done, &done);
+            }
         }
+    }
+
+    /* Leaving: the JACK process thread must not wait for this thread anymore. */
+    {
+        struct asio_callback_done_params done = { .handle = This->handle, .detach = TRUE };
+        UNIX_CALL(asio_callback_done, &done);
     }
 
     return 0;

@@ -37,7 +37,11 @@
 #include <sys/eventfd.h>
 #include <poll.h>
 #include <pthread.h>
+#include <sched.h>
 #include <dlfcn.h>
+#include <time.h>
+#include <sys/syscall.h>
+#include <linux/futex.h>
 
 #include "ntstatus.h"
 #define WIN32_NO_STATUS
@@ -134,6 +138,8 @@ static int (*pjack_set_latency_callback)(jack_client_t*, void (*)(jack_latency_c
 static void (*pjack_port_get_latency_range)(jack_port_t*, jack_latency_callback_mode_t, jack_latency_range_t*);
 static jack_transport_state_t (*pjack_transport_query)(const jack_client_t*, jack_position_t*);
 static void (*pjack_on_shutdown)(jack_client_t*, void (*)(void*), void*);
+static int (*pjack_is_realtime)(jack_client_t*);
+static int (*pjack_client_real_time_priority)(jack_client_t*);
 
 #define JACK_DEFAULT_AUDIO_TYPE "32 bit float mono audio"
 #define JackPortIsInput  0x1
@@ -190,7 +196,7 @@ typedef struct {
      * Non-realtime callbacks (buffer_size, sample_rate, latency) still use the mutex. */
     pthread_mutex_t callback_lock;          /* protects non-realtime fields only */
     volatile LONG buffer_switch_pending;    /* written atomically by RT thread */
-    volatile LONG pending_buffer_index;     /* written atomically by RT thread */
+    volatile INT64 pending_cycle;           /* (cycle seq << 1) | buffer index, written by RT thread */
     volatile INT64 sample_position;         /* written atomically by RT thread */
     volatile INT64 system_time;             /* written atomically by RT thread */
     BOOL sample_rate_changed;               /* protected by callback_lock */
@@ -200,6 +206,14 @@ typedef struct {
     
     /* Event signaling (replaces Sleep-polling) */
     int event_fd;                           /* eventfd for RT→PE notification */
+
+    /* Synchronous hand-off: the RT thread waits until the host has finished
+     * bufferSwitch() for the current cycle before it copies the output half,
+     * so the host's output leaves in the same JACK cycle. */
+    UINT32 cycle_seq;                       /* RT thread only */
+    volatile UINT32 done_seq;               /* futex word, last cycle the host finished */
+    volatile LONG host_attached;            /* callback thread is taking cycles */
+    volatile LONG late_cycles;              /* cycles output as silence, host too late */
 
     /* Config */
     BOOL autoconnect;
@@ -259,6 +273,8 @@ static BOOL load_jack(void)
     LOAD_SYM(jack_port_get_latency_range)
     LOAD_SYM(jack_transport_query)
     LOAD_SYM(jack_on_shutdown)
+    LOAD_SYM(jack_is_realtime)
+    LOAD_SYM(jack_client_real_time_priority)
 
     #undef LOAD_SYM
     
@@ -281,12 +297,50 @@ static INT64 get_system_time(void)
     return (INT64)ts.tv_sec * 1000000000LL + ts.tv_nsec;
 }
 
+/* Wait until the host has finished bufferSwitch() for cycle 'seq'.
+ * Runs in the JACK realtime thread: no locks, only a futex wait with a
+ * deadline of two periods (at least 5 ms), so a stalled host costs xruns
+ * instead of getting the client kicked out of the graph. */
+static BOOL wait_for_host(AsioStream *stream, UINT32 seq, jack_nframes_t nframes)
+{
+    struct timespec now, ts;
+    INT64 timeout, start, left;
+    UINT32 done;
+
+    timeout = stream->sample_rate > 0 ? (INT64)(2e9 * nframes / stream->sample_rate) : 0;
+    if (timeout < 5000000) timeout = 5000000;
+    clock_gettime(CLOCK_MONOTONIC, &now);
+    start = (INT64)now.tv_sec * 1000000000LL + now.tv_nsec;
+
+    for (;;) {
+        done = __atomic_load_n(&stream->done_seq, __ATOMIC_ACQUIRE);
+        if ((INT32)(done - seq) >= 0)
+            return TRUE;
+        if (!__atomic_load_n(&stream->host_attached, __ATOMIC_ACQUIRE))
+            return FALSE;
+        clock_gettime(CLOCK_MONOTONIC, &now);
+        left = start + timeout - ((INT64)now.tv_sec * 1000000000LL + now.tv_nsec);
+        if (left <= 0)
+            return FALSE;
+        ts.tv_sec = left / 1000000000LL;
+        ts.tv_nsec = left % 1000000000LL;
+        syscall(SYS_futex, &stream->done_seq, FUTEX_WAIT_PRIVATE, done, &ts, NULL, 0);
+    }
+}
+
+static void wake_rt_thread(AsioStream *stream)
+{
+    syscall(SYS_futex, &stream->done_seq, FUTEX_WAKE_PRIVATE, INT_MAX, NULL, NULL, 0);
+}
+
 /* JACK process callback - runs in realtime thread */
 static int jack_process_callback(jack_nframes_t nframes, void *arg)
 {
     AsioStream *stream = (AsioStream *)arg;
+    UINT32 seq;
+    BOOL host_done;
     int i;
-    
+
     if (stream->state != Running) {
         /* Output silence */
         for (i = 0; i < stream->num_outputs; i++) {
@@ -312,32 +366,44 @@ static int jack_process_callback(jack_nframes_t nframes, void *arg)
         }
     }
     
-    /* Copy PE-side output buffer to JACK
-     * Wine 11 WoW64 fix: Use pe_buffer[] instead of audio_buffer */
-    for (i = 0; i < stream->num_outputs; i++) {
-        if (stream->outputs[i].active && stream->outputs[i].port) {
-            void *jack_buf = pjack_port_get_buffer(stream->outputs[i].port, nframes);
-            jack_default_audio_sample_t *pe_buf = stream->outputs[i].pe_buffer[stream->buffer_index];
-            if (jack_buf && pe_buf) {
-                memcpy(jack_buf, pe_buf, sizeof(jack_default_audio_sample_t) * nframes);
-            }
-            /* No logging in realtime callback - causes xruns */
-        }
-    }
-    
     /* Update sample position and time atomically (no mutex in RT thread!) */
     __atomic_store_n(&stream->sample_position, stream->sample_position + nframes, __ATOMIC_RELAXED);
     __atomic_store_n(&stream->system_time, get_system_time(), __ATOMIC_RELAXED);
 
     /* Signal buffer switch to PE side — lock-free with release semantics.
-     * pending_buffer_index must be visible before buffer_switch_pending is set. */
-    __atomic_store_n(&stream->pending_buffer_index, stream->buffer_index, __ATOMIC_RELAXED);
+     * pending_cycle must be visible before buffer_switch_pending is set. */
+    seq = ++stream->cycle_seq;
+    __atomic_store_n(&stream->pending_cycle, ((INT64)seq << 1) | stream->buffer_index, __ATOMIC_RELAXED);
     __atomic_store_n(&stream->buffer_switch_pending, TRUE, __ATOMIC_RELEASE);
 
     /* Wake PE-side wait thread via eventfd (RT-safe: eventfd_write is a single write syscall) */
     {
         uint64_t val = 1;
         eventfd_write(stream->event_fd, val);
+    }
+
+    /* Wait for the host to fill this half, then copy it out in the same cycle.
+     * Copying before the host ran (the former order) sent each half two cycles
+     * late. A host that misses the deadline gets silence for this cycle rather
+     * than a half it may still be writing. */
+    host_done = __atomic_load_n(&stream->host_attached, __ATOMIC_ACQUIRE)
+                && wait_for_host(stream, seq, nframes);
+    if (!host_done && __atomic_load_n(&stream->host_attached, __ATOMIC_RELAXED))
+        __atomic_add_fetch(&stream->late_cycles, 1, __ATOMIC_RELAXED);
+
+    /* Copy PE-side output buffer to JACK
+     * Wine 11 WoW64 fix: Use pe_buffer[] instead of audio_buffer */
+    for (i = 0; i < stream->num_outputs; i++) {
+        if (stream->outputs[i].active && stream->outputs[i].port) {
+            void *jack_buf = pjack_port_get_buffer(stream->outputs[i].port, nframes);
+            jack_default_audio_sample_t *pe_buf = stream->outputs[i].pe_buffer[stream->buffer_index];
+            if (jack_buf && pe_buf && host_done) {
+                memcpy(jack_buf, pe_buf, sizeof(jack_default_audio_sample_t) * nframes);
+            } else if (jack_buf) {
+                memset(jack_buf, 0, sizeof(jack_default_audio_sample_t) * nframes);
+            }
+            /* No logging in realtime callback - causes xruns */
+        }
     }
 
     /* Switch buffers */
@@ -655,6 +721,13 @@ static NTSTATUS asio_start(void *args)
     stream->sample_position = 0;
     stream->system_time = get_system_time();
     stream->buffer_switch_pending = FALSE;
+    stream->pending_cycle = 0;
+    stream->cycle_seq = 0;
+    stream->done_seq = 0;
+    stream->late_cycles = 0;
+    /* The PE side starts its callback thread after this call returns; until
+     * that thread asks for a cycle, the RT thread does not wait for it. */
+    stream->host_attached = FALSE;
 
     /* Clear stale flags from JACK activation callbacks.
      * jack_activate() triggers sample_rate_callback and buffer_size_callback
@@ -683,8 +756,13 @@ static NTSTATUS asio_stop(void *args)
         params->result = ASE_InvalidMode;
         return STATUS_SUCCESS;
     }
-    
+
     stream->state = Prepared;
+    __atomic_store_n(&stream->host_attached, FALSE, __ATOMIC_RELEASE);
+    wake_rt_thread(stream);
+    if (stream->late_cycles)
+        WARN("%d cycle(s) output as silence: host did not finish bufferSwitch in time\n",
+             (int)stream->late_cycles);
     params->result = ASE_OK;
 
     return STATUS_SUCCESS;
@@ -1026,7 +1104,7 @@ static NTSTATUS asio_get_callback(void *args)
     /* Read RT-thread fields with acquire semantics (lock-free).
      * buffer_switch_pending acts as the release/acquire synchronization point. */
     params->buffer_switch_ready = __atomic_load_n(&stream->buffer_switch_pending, __ATOMIC_ACQUIRE);
-    params->buffer_index = __atomic_load_n(&stream->pending_buffer_index, __ATOMIC_RELAXED);
+    params->buffer_index = (LONG)(__atomic_load_n(&stream->pending_cycle, __ATOMIC_RELAXED) & 1);
     params->direct_process = TRUE;
 
     params->time_info.speed = 1.0;
@@ -1057,15 +1135,45 @@ static NTSTATUS asio_get_callback(void *args)
     return STATUS_SUCCESS;
 }
 
+/* Give the callback thread the scheduling of the JACK process thread.
+ * The RT thread now waits for the host's bufferSwitch() every cycle; WineASIO
+ * upstream runs that callback inside the JACK thread itself. Runs once per
+ * thread, on the thread that calls asio_wait_callback (the PE callback thread,
+ * also under WoW64). */
+static void promote_callback_thread(AsioStream *stream)
+{
+    static __thread BOOL tried;
+    struct sched_param sp;
+    int prio, err;
+
+    if (tried) return;
+    tried = TRUE;
+    if (!pjack_is_realtime || !pjack_client_real_time_priority || !pjack_is_realtime(stream->client))
+        return;
+    prio = pjack_client_real_time_priority(stream->client);
+    if (prio <= 0) return;
+    memset(&sp, 0, sizeof(sp));
+    sp.sched_priority = prio;
+    err = pthread_setschedparam(pthread_self(), SCHED_FIFO, &sp);
+    if (err)
+        WARN("callback thread stays at normal priority, SCHED_FIFO %d: %s\n", prio, strerror(err));
+    else
+        TRACE("callback thread runs at SCHED_FIFO %d\n", prio);
+}
+
 static NTSTATUS asio_wait_callback(void *args)
 {
     struct asio_wait_callback_params *params = args;
     AsioStream *stream = handle_to_stream(params->handle);
+    INT64 cycle;
 
     if (!stream) {
         params->result = ASE_InvalidParameter;
         return STATUS_SUCCESS;
     }
+
+    promote_callback_thread(stream);
+    __atomic_store_n(&stream->host_attached, TRUE, __ATOMIC_RELEASE);
 
     /* Block until eventfd is signaled or timeout expires.
      * This replaces the Sleep(1) polling loop on the PE side. */
@@ -1080,9 +1188,12 @@ static NTSTATUS asio_wait_callback(void *args)
         }
     }
 
-    /* Read RT-thread fields with acquire semantics */
+    /* Read RT-thread fields with acquire semantics; index and cycle number
+     * come from one word so they always belong to the same cycle. */
     params->buffer_switch_ready = __atomic_load_n(&stream->buffer_switch_pending, __ATOMIC_ACQUIRE);
-    params->buffer_index = __atomic_load_n(&stream->pending_buffer_index, __ATOMIC_RELAXED);
+    cycle = __atomic_load_n(&stream->pending_cycle, __ATOMIC_RELAXED);
+    params->buffer_index = (LONG)(cycle & 1);
+    params->seq = (UINT32)(cycle >> 1);
     params->direct_process = TRUE;
 
     params->time_info.speed = 1.0;
@@ -1111,10 +1222,24 @@ static NTSTATUS asio_wait_callback(void *args)
     return STATUS_SUCCESS;
 }
 
+/* The host has returned from bufferSwitch() for cycle 'seq' (or the callback
+ * thread is leaving, 'detach'): release the RT thread waiting in wait_for_host. */
 static NTSTATUS asio_callback_done(void *args)
 {
     struct asio_callback_done_params *params = args;
-    /* Currently unused - the callback is processed synchronously */
+    AsioStream *stream = handle_to_stream(params->handle);
+
+    if (!stream) {
+        params->result = ASE_InvalidParameter;
+        return STATUS_SUCCESS;
+    }
+
+    if (params->detach)
+        __atomic_store_n(&stream->host_attached, FALSE, __ATOMIC_RELEASE);
+    else
+        __atomic_store_n(&stream->done_seq, params->seq, __ATOMIC_RELEASE);
+    wake_rt_thread(stream);
+
     params->result = ASE_OK;
     return STATUS_SUCCESS;
 }
