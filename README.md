@@ -24,7 +24,7 @@ This setup proves that Linux is a fully viable platform for professional audio p
 
 ---
 
-## Wine 11 Support (v1.4.2)
+## Wine 11 Support
 
 **WineASIO now fully supports Wine 11, including 32-bit applications!**
 
@@ -429,7 +429,8 @@ wineasio/
 │   ├── WINE11_WOW64_ARCHITECTURE.md
 │   └── WINE11_WOW64_32BIT_SOLUTION.md
 ├── tests/              # Test programs
-│   └── test_asio_*.c
+│   ├── test_asio_*.c
+│   └── loopback/       # Round-trip latency without audio hardware
 └── docker/             # Docker build environment
 ```
 
@@ -447,6 +448,9 @@ Contributions are welcome! Please test with:
 - Wine 11.x (new architecture)
 - Various DAWs (FL Studio, Reaper, Ableton, Bitwig, etc.)
 - Both 32-bit and 64-bit applications
+
+[`tests/loopback`](tests/loopback/README.md) measures the round trip through WineASIO against a
+native JACK client, without audio hardware, with jackd or PipeWire's JACK.
 
 ---
 

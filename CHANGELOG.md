@@ -7,7 +7,86 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-## [1.4.4] - 2025-01-31
+## [Unreleased]
+
+### Added
+
+- **Loopback test** (`tests/loopback`): measures the round trip through WineASIO against a native
+  JACK client over a JACK-internal loop, without audio hardware, for 64- and 32-bit hosts and each
+  Output buffering setting; also reports `GetLatencies()`, swallowed cycles and `systemTime`.
+  With PipeWire's JACK the loop goes through a relay client, since PipeWire passes no data over a
+  link from a client to itself.
+
+---
+
+## [1.6.3] - 2026-10-08
+
+### Changed
+
+- **Settings panel**: sets `Output buffering` and lists the `WINEASIO_*` environment variables
+  that override its values. Opened from the host, it saves through the `regedit` of the Wine
+  installation that runs the host. The driver is unchanged from 1.6.2.
+
+---
+
+## [1.6.2] - 2026-10-08
+
+### Fixed
+
+- **Environment overrides**: the `WINEASIO_*` variables documented in the README are read after
+  the registry and take precedence (before, only `WINEASIO_OUTPUT_BUFFERING` was read).
+- **Autostart server**: read from the registry and the environment; when on, libjack starts a
+  server that is not running.
+- **Preferred buffer size**: a value that is not a power of two between 16 and 8192 becomes 1024,
+  as upstream.
+
+---
+
+## [1.6.1] - 2026-10-08
+
+### Fixed
+
+- **`Fixed buffersize` defaults to on** when the registry has no value, so JACK owns the buffer
+  size. Since 1.4.0 a host could pick its own size, and WineASIO asked JACK to switch the whole
+  server to it.
+
+---
+
+## [1.6.0] - 2026-10-08
+
+### Fixed
+
+- **Synchronous buffer switch**: the host's output leaves in the same JACK cycle as its
+  `bufferSwitch()`. Since 1.4.0 it reached JACK two periods later, and `GetLatencies()` did not
+  include those periods. Round trip through a JACK-internal loop: 1 period instead of 3, the same
+  as a native JACK client.
+- **Time info mode**: `CreateBuffers()` asks `kAsioSupportsTimeInfo` and `kAsioSupportsTimeCode`,
+  so hosts that support it get `bufferSwitchTimeInfo()`; the `ASIOTime` layout follows the SDK.
+- **`systemTime`** is read from `CLOCK_BOOTTIME`, the clock behind Wine's `timeGetTime()`.
+
+### Added
+
+- **Output buffering** (`HKCU\Software\Wine\WineASIO\Output buffering` or
+  `WINEASIO_OUTPUT_BUFFERING`): 0 (default) sends the output in the same cycle, 1 and 2 give the
+  host one or two periods of headroom and report them in `GetLatencies()`.
+
+---
+
+## [1.5.0] - 2026-04-05
+
+### Fixed
+
+- Lock-free atomics instead of a mutex in the JACK realtime thread, eventfd signaling instead of
+  `Sleep(1)` polling, a JACK shutdown callback, memory leaks in `DisposeBuffers()` and in the
+  init error paths, null-pointer guards after `jack_port_register()`.
+- `fork()` instead of `vfork()` for the settings panel, no `mlockall(MCL_FUTURE)` for the host
+  process, 64-byte aligned buffers.
+- `GetSamplePosition()` returns the high word (it was 0, so the position wrapped after about
+  25 hours at 48 kHz); no double buffer switch priming in `Start()`.
+
+---
+
+## [1.4.4] - 2026-01-31
 
 ### Removed
 
@@ -25,7 +104,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-## [1.4.2] - 2025-01-21
+## [1.4.3] - 2026-01-28
+
+### Fixed
+
+- Debug traces removed from the JACK realtime callback and the callback polling thread, where
+  they caused xruns; debug output only with `-DWINEASIO_DEBUG`.
+
+---
+
+## [1.4.2] - 2026-01-21
 
 ### Fixed
 
@@ -182,6 +270,14 @@ Successfully tested with:
 
 ---
 
+[Unreleased]: https://github.com/giang17/wineasio/compare/v1.6.3...HEAD
+[1.6.3]: https://github.com/giang17/wineasio/releases/tag/v1.6.3
+[1.6.2]: https://github.com/giang17/wineasio/releases/tag/v1.6.2
+[1.6.1]: https://github.com/giang17/wineasio/releases/tag/v1.6.1
+[1.6.0]: https://github.com/giang17/wineasio/releases/tag/v1.6.0
+[1.5.0]: https://github.com/giang17/wineasio/releases/tag/v1.5.0
+[1.4.4]: https://github.com/giang17/wineasio/releases/tag/v1.4.4
+[1.4.3]: https://github.com/giang17/wineasio/releases/tag/v1.4.3
 [1.4.2]: https://github.com/giang17/wineasio/releases/tag/v1.4.2
 [1.4.1]: https://github.com/giang17/wineasio/releases/tag/v1.4.1
 [1.4.0]: https://github.com/giang17/wineasio/releases/tag/v1.4.0
